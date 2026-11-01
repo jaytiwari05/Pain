@@ -1,0 +1,29 @@
+# Build outputs — agent shellcode
+agent_pain/Obj/
+agent_pain/pain.x64.bin
+agent_pain/pain.x64.exe
+
+# Loader build outputs
+agent_pain/src_loader/loader.exe
+agent_pain/src_loader/pain.dll
+agent_pain/src_loader/pain_svc.exe
+# pain_shellcode.h is intentionally tracked (kept for reference)
+
+# Go plugin build artifacts
+agent_pain/src_server/pain.so
+agent_pain/src_server/pain.dll
+agent_pain/src_server/pain_agent
+listener_pain_http/src_server/listener_pain_http.so
+
+# Misplaced adaptixserver binaries (should never be in source tree)
+agent_pain/adaptix_agent_pain
+agent_pain/src_server/adaptix_agent_pain
+listener_pain_http/src_server/src_server
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.test
+*.out
