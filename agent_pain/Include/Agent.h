@@ -252,6 +252,13 @@ namespace Root
             BOOL  Elevated;
         } Machine = {};
 
+        // BOF execution state - zeroed between tasks by the task handler
+        struct {
+            PVOID  OutputBuf;  // heap buffer that BeaconPrintf/BeaconOutput append to
+            UINT32 OutputLen;  // bytes written so far
+            UINT32 OutputCap;  // current buffer capacity
+        } Bof = {};
+
 
         // constructor - resolves base address and core API's
         // declaration of the Agent.cc

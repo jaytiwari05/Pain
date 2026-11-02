@@ -9,6 +9,8 @@ const (
 	CMD_SHELL = 0x02
 	CMD_PWD   = 0x03
 	CMD_LS    = 0x04
+	CMD_BOF   = 0x05
+
 
 	OS_WINDOWS = 1
 

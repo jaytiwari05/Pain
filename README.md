@@ -4,6 +4,22 @@ Pain is a custom C2 agent built for the [Adaptix](https://github.com/Adaptix-Fra
 
 The goal was simple - understand how a real implant works by building one. No shortcuts, no borrowed shellcode loaders, just writing it piece by piece and figuring out why things break.
 
+> **Requires Adaptix v2.0** — Pain targets the v2.0 plugin API. The public `main` branch of AdaptixC2 may be ahead of or behind this. Use the `testing-v2.0` branch when cloning the framework.
+
+---
+
+## Requirements
+
+Clone the framework and switch to the correct branch before building:
+
+```bash
+git clone https://github.com/Adaptix-Framework/AdaptixC2.git
+cd AdaptixC2
+git checkout testing-v2.0
+```
+
+Then build the Adaptix client and server according to the AdaptixC2 instructions, and come back here to run `setup_pain.sh`.
+
 ---
 
 ## What it does
@@ -17,6 +33,7 @@ The goal was simple - understand how a real implant works by building one. No sh
   - *Command Auth* - a random 16-byte key is generated per build, multiple runs of the same binary are allowed
   - *One-Time Key* - same thing but the server consumes the key on first check-in, any second run gets rejected
 - **Multiple output formats** - generate as a standalone EXE loader, a Windows Service EXE, a DLL, or a raw shellcode `.bin`
+- **BOF Support** - runs Beacon Object Files in-process with a full COFF loader and Beacon API implementation; compatible with the [Adaptix Extension-Kit](https://github.com/Adaptix-Framework/Extension-Kit) BOFs out of the box (whoami, execute-assembly, and the rest of the standard set)
 
 ---
 
@@ -61,7 +78,7 @@ Built while reading Kharon's source and figuring out how each piece fits togethe
 
 The agent isn't production-ready yet but there's a clear roadmap of where it's going:
 
-- **BOF API Support** - execute Beacon Object Files in-process with a proper API proxy layer
+- **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it — keeping the agent process clean
 - **More Sleep Techniques** - EKKO is in, but there are other approaches worth implementing and comparing
 - **More Stack Spoofing** - currently spoofing the main thread's call stack during sleep; more ways to handle this across different execution contexts
 - **More Evasion Capabilities** - AMSI/ETW bypass, syscall obfuscation, and other techniques as the project matures

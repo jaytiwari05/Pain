@@ -8,6 +8,7 @@
 #define CMD_SHELL  0x02
 #define CMD_PWD    0x03
 #define CMD_LS     0x04
+#define CMD_BOF    0x05
 
 
 // Heap subsystem

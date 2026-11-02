@@ -1,4 +1,4 @@
-# Build outputs — agent shellcode
+# Build outputs - agent shellcode
 agent_pain/Obj/
 agent_pain/pain.x64.bin
 agent_pain/pain.x64.exe

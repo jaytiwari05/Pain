@@ -2,6 +2,8 @@ package main
 
 import (
 	cryptorand "crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -432,11 +434,63 @@ func CreateCommand(agentData ax.AgentData, args map[string]any) (ax.TaskData, ax
 		messageData.Message = "exit"
 		messageData.Status = MESSAGE_ERROR
 
+	case "execute_bof":
+		bofPath, _ := args["bof_path"].(string)
+		bofBytes, err := os.ReadFile(bofPath)
+		if err != nil {
+			return taskData, messageData, fmt.Errorf("cannot read BOF file %s: %v", bofPath, err)
+		}
+
+		// bof_args is base64(ax.bof_pack output). Decode outer base64, then fix any
+		// inner base64-encoded PE bytes caused by the Extension-Kit's resolveFileRefs.
+		bofArgsB64, _ := args["bof_args"].(string)
+		bofArgs, _ := base64.StdEncoding.DecodeString(bofArgsB64)
+		bofArgs = fixB64PEInBofArgs(bofArgs)
+
+		argPacker.WriteBytes(bofBytes)
+		argPacker.WriteBytes(bofArgs)
+		taskData.Data = buildTaskPacket(CMD_BOF, argPacker.Bytes())
+		messageData.Message = fmt.Sprintf("execute_bof: %s (%d bytes)", bofPath, len(bofBytes))
+
 	default:
 		return taskData, messageData, fmt.Errorf("Unknown command: %s", command)
 	}
 
 	return taskData, messageData, nil
+}
+
+// fixB64PEInBofArgs detects when the first "bytes" argument inside a bof_pack
+// buffer is base64-encoded PE data (the Extension-Kit's resolveFileRefs always
+// base64-encodes uploaded file content, so it arrives double-encoded). If the
+// first arg is not a raw MZ PE but base64-decodes to one, the buffer is rebuilt
+// with the decoded bytes. Safe to call on any BOF arg buffer — non-PE args are
+// left untouched.
+func fixB64PEInBofArgs(packed []byte) []byte {
+	// ax.bof_pack layout: [4 LE total_len][4 LE len1][bytes1][4 LE len2][bytes2]...
+	if len(packed) < 8 {
+		return packed
+	}
+	asmLen := int(binary.LittleEndian.Uint32(packed[4:]))
+	dataStart := 8
+	if dataStart+asmLen > len(packed) || asmLen < 2 {
+		return packed
+	}
+	asmBytes := packed[dataStart : dataStart+asmLen]
+	if asmBytes[0] == 0x4D && asmBytes[1] == 0x5A {
+		return packed // already raw PE
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(asmBytes))
+	if err != nil || len(decoded) < 2 || decoded[0] != 0x4D || decoded[1] != 0x5A {
+		return packed // not base64 PE, leave as-is
+	}
+	rest := packed[dataStart+asmLen:]
+	newTotal := uint32(4 + len(decoded) + len(rest))
+	out := make([]byte, 4+4+len(decoded)+len(rest))
+	binary.LittleEndian.PutUint32(out[0:], newTotal)
+	binary.LittleEndian.PutUint32(out[4:], uint32(len(decoded)))
+	copy(out[8:], decoded)
+	copy(out[8+len(decoded):], rest)
+	return out
 }
 
 // buildTaskPacket serialises one task into [cmd_id][4-byte arg len][arg bytes]

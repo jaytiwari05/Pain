@@ -61,6 +61,8 @@ CXX_OBJ = $(OBJ_DIR)/LdrLoad.o \
 		  $(OBJ_DIR)/Transport.o \
 		  $(OBJ_DIR)/Tasks.o      \
 		  $(OBJ_DIR)/Beacon.o     \
+		  $(OBJ_DIR)/Bof.o        \
+		  $(OBJ_DIR)/BeaconApi.o  \
 
 all : dirs $(TARGET)
 
@@ -121,6 +123,14 @@ $(OBJ_DIR)/Tasks.o: Source/Misc/Tasks.cc
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/Beacon.o: Source/Evasion/Beacon.cc
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/Bof.o: Source/Misc/Bof.cc
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/BeaconApi.o: Source/Misc/BeaconApi.cc
 	@echo "[CXX] $<"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
