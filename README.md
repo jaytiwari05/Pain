@@ -1,6 +1,9 @@
 # Pain
 
-Pain is a custom C2 agent built for the [Adaptix](https://github.com/Adaptix-Framework/AdaptixC2) framework. It was written from scratch as a learning project, heavily inspired by [Kharon](https://github.com/MrAle98/Kharon).
+<img width="1536" height="1024" alt="Pain_Picture" src="https://github.com/user-attachments/assets/b19a8d05-dd08-4cc6-94d5-140667f2fcbd" />
+
+
+Pain is a custom C2 agent built for the [Adaptix](https://github.com/Adaptix-Framework/AdaptixC2) framework. It was written from scratch as a learning project, heavily inspired by [Kharon](https://github.com/entropy-z/Kharon).
 
 The goal was simple - understand how a real implant works by building one. No shortcuts, no borrowed shellcode loaders, just writing it piece by piece and figuring out why things break.
 
