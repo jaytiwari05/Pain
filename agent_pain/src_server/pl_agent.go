@@ -386,7 +386,6 @@ func genShellcodeHeader(data []byte) []byte {
 	return []byte(b.String())
 }
 
-
 // CreateCommand builds a task packet when the operator runs a command in the UI
 func CreateCommand(agentData ax.AgentData, args map[string]any) (ax.TaskData, ax.ConsoleMessageData, error) {
 	var (
@@ -463,7 +462,7 @@ func CreateCommand(agentData ax.AgentData, args map[string]any) (ax.TaskData, ax
 // buffer is base64-encoded PE data (the Extension-Kit's resolveFileRefs always
 // base64-encodes uploaded file content, so it arrives double-encoded). If the
 // first arg is not a raw MZ PE but base64-decodes to one, the buffer is rebuilt
-// with the decoded bytes. Safe to call on any BOF arg buffer — non-PE args are
+// with the decoded bytes. Safe to call on any BOF arg buffer - non-PE args are
 // left untouched.
 func fixB64PEInBofArgs(packed []byte) []byte {
 	// ax.bof_pack layout: [4 LE total_len][4 LE len1][bytes1][4 LE len2][bytes2]...

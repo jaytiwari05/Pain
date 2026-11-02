@@ -7,7 +7,7 @@ Pain is a custom C2 agent built for the [Adaptix](https://github.com/Adaptix-Fra
 
 The goal was simple - understand how a real implant works by building one. No shortcuts, no borrowed shellcode loaders, just writing it piece by piece and figuring out why things break.
 
-> **Requires Adaptix v2.0** — Pain targets the v2.0 plugin API. The public `main` branch of AdaptixC2 may be ahead of or behind this. Use the `testing-v2.0` branch when cloning the framework.
+> **Requires Adaptix v2.0** - Pain targets the v2.0 plugin API. The public `main` branch of AdaptixC2 may be ahead of or behind this. Use the `testing-v2.0` branch when cloning the framework.
 
 ---
 
@@ -81,7 +81,7 @@ Built while reading Kharon's source and figuring out how each piece fits togethe
 
 The agent isn't production-ready yet but there's a clear roadmap of where it's going:
 
-- **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it — keeping the agent process clean
+- **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it - keeping the agent process clean
 - **More Sleep Techniques** - EKKO is in, but there are other approaches worth implementing and comparing
 - **More Stack Spoofing** - currently spoofing the main thread's call stack during sleep; more ways to handle this across different execution contexts
 - **More Evasion Capabilities** - AMSI/ETW bypass, syscall obfuscation, and other techniques as the project matures
