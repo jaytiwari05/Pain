@@ -57,6 +57,22 @@ function GenerateUI(listeners_type) {
     let authGroup = form.create_groupbox("Authentication");
     authGroup.setPanel(authPanel);
 
+    // ---- Sleep obfuscation group ----
+    let comboSleepTech = form.create_combo();
+    comboSleepTech.addItems(["Timer Spoof", "Ekko"]);
+    comboSleepTech.setCurrentIndex(0);
+
+    let sleepTechLayout = form.create_gridlayout();
+    sleepTechLayout.addWidget(form.create_label("Technique:"), 0, 0, 1, 1);
+    sleepTechLayout.addWidget(comboSleepTech,                   0, 1, 1, 1);
+    sleepTechLayout.setColumnStretch(1, 1);
+
+    let sleepTechPanel = form.create_panel();
+    sleepTechPanel.setLayout(sleepTechLayout);
+
+    let sleepTechGroup = form.create_groupbox("Sleep Obfuscation");
+    sleepTechGroup.setPanel(sleepTechPanel);
+
     // ---- Output format group ----
     let comboFormat = form.create_combo();
     comboFormat.addItems(["Exe", "Service Exe", "DLL", "Shellcode"]);
@@ -75,25 +91,27 @@ function GenerateUI(listeners_type) {
 
     // ---- Root layout: groups stacked vertically ----
     let rootLayout = form.create_gridlayout();
-    rootLayout.addWidget(infoGroup,   0, 0, 1, 1);
-    rootLayout.addWidget(timingGroup, 1, 0, 1, 1);
-    rootLayout.addWidget(authGroup,   2, 0, 1, 1);
-    rootLayout.addWidget(fmtGroup,    3, 0, 1, 1);
+    rootLayout.addWidget(infoGroup,      0, 0, 1, 1);
+    rootLayout.addWidget(timingGroup,    1, 0, 1, 1);
+    rootLayout.addWidget(sleepTechGroup, 2, 0, 1, 1);
+    rootLayout.addWidget(authGroup,      3, 0, 1, 1);
+    rootLayout.addWidget(fmtGroup,       4, 0, 1, 1);
     rootLayout.setColumnStretch(0, 1);
 
     let rootPanel = form.create_panel();
     rootPanel.setLayout(rootLayout);
 
-    container.put("format",   comboFormat);
-    container.put("sleep",     spinSleep);
-    container.put("jitter",    spinJitter);
-    container.put("auth_mode", comboAuth);
+    container.put("format",     comboFormat);
+    container.put("sleep",      spinSleep);
+    container.put("jitter",     spinJitter);
+    container.put("sleep_tech", comboSleepTech);
+    container.put("auth_mode",  comboAuth);
 
 
     return {
         ui_panel:      rootPanel,
         ui_container:  container,
-        ui_height:     400,
+        ui_height:     480,
         ui_width:      580
     };
 }

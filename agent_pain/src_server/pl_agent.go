@@ -252,10 +252,11 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 
 	// 2. Parse sleep/jitter/auth/format from the agent build form
 	var uiCfg struct {
-		Sleep    int    `json:"sleep"`
-		Jitter   int    `json:"jitter"`
-		AuthMode string `json:"auth_mode"` // combo currentText()
-		Format   string `json:"format"`    // "Exe" | "Service Exe" | "DLL" | "Shellcode"
+		Sleep     int    `json:"sleep"`
+		Jitter    int    `json:"jitter"`
+		SleepTech string `json:"sleep_tech"` // "Timer Spoof" | "Ekko"
+		AuthMode  string `json:"auth_mode"`  // combo currentText()
+		Format    string `json:"format"`     // "Exe" | "Service Exe" | "DLL" | "Shellcode"
 	}
 	uiCfg.Sleep = 5
 	_ = json.Unmarshal([]byte(profile.AgentConfig), &uiCfg)
@@ -294,6 +295,11 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	if lp.Ssl {
 		sslFlag = 1
 	}
+	sleepTech := 0 // default: Timer Spoof
+	if strings.HasPrefix(uiCfg.SleepTech, "Ekko") {
+		sleepTech = 1
+	}
+
 	makeArgs := []string{
 		fmt.Sprintf("PAIN_C2_HOST=%s", lp.Host),
 		fmt.Sprintf("PAIN_C2_PORT=%d", lp.Port),
@@ -301,6 +307,7 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 		fmt.Sprintf("PAIN_JITTER=%d", uiCfg.Jitter),
 		fmt.Sprintf("PAIN_C2_SSL=%d", sslFlag),
 		fmt.Sprintf("PAIN_AUTH_MODE=%d", authMode),
+		fmt.Sprintf("PAIN_SLEEP_TECH=%d", sleepTech),
 	}
 	if authKeyHex != "" {
 		makeArgs = append(makeArgs, fmt.Sprintf("PAIN_AUTH_KEY=%s", authKeyHex))

@@ -29,7 +29,7 @@ Then build the Adaptix client and server according to the AdaptixC2 instructions
 
 - **Position-Independent Code** - the agent is a raw `.bin` shellcode blob, no PE headers, no reflective loader needed
 - **HTTP and HTTPS transport** - talks to the C2 over HTTP POST, supports HTTPS with self-signed cert bypass
-- **Sleep obfuscation** - uses the EKKO timer-chain technique to encrypt memory and spoof the call stack while sleeping
+- **Sleep obfuscation** - custom Ntdll timer-chain sleep: encrypts the shellcode in place with `SystemFunction040` (RtlEncryptMemory), XORs the heap, and spoof the main thread's call stack via `NtSetContextThread` - all while blocked in `NtSignalAndWaitForSingleObject`
 - **Heap tracking** - all agent allocations go through a private heap with a linked-list tracker; the full heap gets XOR'd during sleep
 - **Runtime UUID** - every execution generates a fresh identity from ASLR entropy so running the same binary twice gives you two separate sessions
 - **Authentication** - two optional modes baked in at build time:
@@ -82,7 +82,7 @@ Built while reading Kharon's source and figuring out how each piece fits togethe
 The agent isn't production-ready yet but there's a clear roadmap of where it's going:
 
 - **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it - keeping the agent process clean
-- **More Sleep Techniques** - EKKO is in, but there are other approaches worth implementing and comparing
+- **More Sleep Techniques** - the current timer-chain works but synthetic frame spoofing (building a believable fake call stack instead of substituting the timer thread's context) is the next step
 - **More Stack Spoofing** - currently spoofing the main thread's call stack during sleep; more ways to handle this across different execution contexts
 - **More Evasion Capabilities** - AMSI/ETW bypass, syscall obfuscation, and other techniques as the project matures
 - **C2 Profile Support** - malleable HTTP profiles so traffic patterns can be customized per engagement

