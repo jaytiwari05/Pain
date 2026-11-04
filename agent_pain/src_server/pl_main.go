@@ -44,6 +44,7 @@ var (
 	ModuleObject   *ModuleExtender
 	ModuleDir      string
 	AgentWatermark string
+	SrcPath        = "src_agent" // agent source tree symlinked by setup_pain.sh
 )
 
 // InitPlugin is the only exported symbol in the plugin

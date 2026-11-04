@@ -69,9 +69,10 @@ LISTENER_SRC="$PAIN_ROOT/listener_pain_http/src_server"
 AGENT_EXTENDER="$EXTENDERS_DIR/agent_pain"
 LISTENER_EXTENDER="$EXTENDERS_DIR/listener_pain_http"
 
-# Go module paths relative to go.work location (AdaptixServer/)
-AGENT_MOD_REL="../../Pain/agent_pain/src_server"
-LISTENER_MOD_REL="../../Pain/listener_pain_http"
+# Go module paths relative to go.work location (AdaptixServer/) - computed dynamically
+# so the same script works regardless of where the repos are checked out
+AGENT_MOD_REL="$(realpath --relative-to="$AX_SERVER" "$PAIN_ROOT/agent_pain/src_server")"
+LISTENER_MOD_REL="$(realpath --relative-to="$AX_SERVER" "$PAIN_ROOT/listener_pain_http")"
 
 export GOWORK
 
@@ -110,15 +111,30 @@ step "2/8" "Checking go.work..."
 register_gomod() {
     local rel="$1"
     local label="$2"
-    if grep -qF "$rel" "$GOWORK" 2>/dev/null; then
+    # exact-line match to avoid substring false-positives (e.g. foo vs foo/src_server)
+    if grep -qxF "	$rel" "$GOWORK" 2>/dev/null; then
         ok "$label already in go.work"
     else
         info "Adding $label to go.work..."
-        # Insert before the closing ')' of the use block
         sed -i "/^)$/i\\\\t$rel" "$GOWORK"
         ok "$label added to go.work"
     fi
 }
+
+prune_gomod() {
+    local rel="$1"
+    local label="$2"
+    if grep -qxF "	$rel" "$GOWORK" 2>/dev/null; then
+        info "Removing stale $label entry from go.work..."
+        sed -i "\|^[[:space:]]*${rel}[[:space:]]*\$|d" "$GOWORK"
+        ok "$label stale entry removed"
+    fi
+}
+
+# Remove stale entries left by older runs of this script
+prune_gomod "../../Pain/agent_pain/src_server"  "old agent_pain/src_server"
+prune_gomod "../../Pain/listener_pain_http"      "old listener_pain_http"
+prune_gomod "../../Pain/listener_pain_http/src_server" "listener_pain_http/src_server (no go.mod)"
 
 register_gomod "$AGENT_MOD_REL"    "agent_pain/src_server"
 register_gomod "$LISTENER_MOD_REL" "listener_pain_http"
@@ -233,6 +249,12 @@ listener_name: "PainHTTP"
 listener_type: "external"
 protocol: "http"
 EOF
+
+# Symlink the agent source tree so the plugin resolves ModuleDir/src_agent at runtime.
+# A symlink (not a copy) means edits to agent_pain/ take effect on the next UI build
+# without re-running this script.
+ln -sfn "$PAIN_ROOT/agent_pain" "$AGENT_EXTENDER/src_agent"
+ok "src_agent symlink -> $PAIN_ROOT/agent_pain"
 
 ok "Files deployed"
 

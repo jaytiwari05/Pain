@@ -282,8 +282,18 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 		}
 	}
 
-	agentSrc := "/home/pain/Documents/Pain/agent_pain"
+	agentSrc := ModuleDir + "/" + SrcPath
 	loaderSrc := agentSrc + "/src_loader"
+
+	// Fail fast with a clear message rather than a confusing make error
+	if _, err := os.Stat(agentSrc + "/Makefile"); err != nil {
+		return nil, "", fmt.Errorf("agent source not found at %s - run setup_pain.sh", agentSrc)
+	}
+	for _, tool := range []string{"make", "clang++", "nasm", "x86_64-w64-mingw32-ld", "objcopy"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return nil, "", fmt.Errorf("%s not in PATH - server process may have a different PATH than your shell", tool)
+		}
+	}
 
 	// 4. Compile agent shellcode with operator-supplied parameters.
 	// UUID is now generated at agent runtime - no PAIN_AGENT_UUID make variable.
