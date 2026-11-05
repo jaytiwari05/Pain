@@ -29,7 +29,9 @@ Then build the Adaptix client and server according to the AdaptixC2 instructions
 
 - **Position-Independent Code** - the agent is a raw `.bin` shellcode blob, no PE headers, no reflective loader needed
 - **HTTP and HTTPS transport** - talks to the C2 over HTTP POST, supports HTTPS with self-signed cert bypass
-- **Sleep obfuscation** - custom Ntdll timer-chain sleep: encrypts the shellcode in place with `SystemFunction040` (RtlEncryptMemory), XORs the heap, and spoof the main thread's call stack via `NtSetContextThread` - all while blocked in `NtSignalAndWaitForSingleObject`
+- **Sleep obfuscation (Ekko)** - timer-chain sleep via `RtlCreateTimerQueue` + `NtContinue`: flips shellcode to RW, encrypts it with `cryptbase!SystemFunction040` (RtlEncryptMemory), XORs the full tracked heap, then restores - all while the main thread is parked in `NtSignalAndWaitForSingleObject`
+- **Sleep-time synthetic stack frame spoofing** - while the main thread is sleeping, a timer pool step calls `NtGetContextThread` (saves real RSP/RIP), then `NtSetContextThread` to point the thread's saved context at a hand-built fake stack (`NtSignalAndWait → kernel32 gadget → BaseThreadInitThunk+0x14 → RtlUserThreadStart+0x21`); real context is restored before `EvEnd` is signalled so the thread resumes cleanly
+- **Live call stack spoofing (SpoofCall)** - wraps every sensitive NT/WinAPI call with a synthetic call chain: pops the real return address, builds fake frames (`jmp [rbx]` gadget → `BaseThreadInitThunk` → `RtlUserThreadStart`) on the stack using UNWIND_INFO frame sizes, then `jmp`s (not `call`s) to the target; when the target returns the gadget fires and `.restore` jumps back to the real caller - no agent addresses visible in the call stack during active execution
 - **Heap tracking** - all agent allocations go through a private heap with a linked-list tracker; the full heap gets XOR'd during sleep
 - **Runtime UUID** - every execution generates a fresh identity from ASLR entropy so running the same binary twice gives you two separate sessions
 - **Authentication** - two optional modes baked in at build time:
@@ -82,8 +84,8 @@ Built while reading Kharon's source and figuring out how each piece fits togethe
 The agent isn't production-ready yet but there's a clear roadmap of where it's going:
 
 - **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it - keeping the agent process clean
-- **More Sleep Techniques** - the current timer-chain works but synthetic frame spoofing (building a believable fake call stack instead of substituting the timer thread's context) is the next step
-- **More Stack Spoofing** - currently spoofing the main thread's call stack during sleep; more ways to handle this across different execution contexts
+- **More Sleep Techniques** - explore EkkoGraft and TimerSpoof variants; indirect syscalls during the timer chain
+- **More Stack Spoofing** - extend live spoofing to cover more call sites; handle spoofing across injected threads and BOF execution contexts
 - **More Evasion Capabilities** - AMSI/ETW bypass, syscall obfuscation, and other techniques as the project matures
 - **C2 Profile Support** - malleable HTTP profiles so traffic patterns can be customized per engagement
 - **SMB Listener** - peer-to-peer beaconing over named pipes for internal network pivoting

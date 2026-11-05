@@ -102,6 +102,7 @@ extern "C" BOOLEAN  NTAPI RtlFreeHeap( PVOID HeapHandle, ULONG Flags, PVOID Memo
 extern "C" NTSTATUS NTAPI NtAllocateVirtualMemory( HANDLE ProcessHandle, PVOID* BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect );
 extern "C" NTSTATUS NTAPI NtFreeVirtualMemory( HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG FreeType );
 extern "C" NTSTATUS NTAPI NtProtectVirtualMemory( HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG NewProtect, PULONG OldProtect );
+extern "C" NTSTATUS NTAPI NtQueryVirtualMemory( HANDLE ProcessHandle, PVOID BaseAddress, ULONG MemoryInformationClass, PVOID Buffer, SIZE_T Length, PSIZE_T ResultLength );
 
 // debug output
 extern "C" ULONG    NTAPI DbgPrint( PCSTR Format, ... );
@@ -131,5 +132,11 @@ extern "C" NTSTATUS NTAPI SystemFunction041( PVOID pBuffer, ULONG cbBuffer, ULON
 // thread context manipulation (stack spoofing)
 extern "C" NTSTATUS NTAPI NtGetContextThread( HANDLE ThreadHandle, PCONTEXT ThreadContext );
 extern "C" NTSTATUS NTAPI NtSetContextThread( HANDLE ThreadHandle, PCONTEXT ThreadContext );
+
+// live call-stack spoofing anchor functions - we only need their addresses
+extern "C" void NTAPI  RtlUserThreadStart( PVOID Function, PVOID Parameter );
+extern "C" void WINAPI BaseThreadInitThunk( ULONG Flags, PVOID Function, PVOID Parameter );
+// RtlLookupFunctionEntry is already declared in winnt.h (PRUNTIME_FUNCTION return),
+// so no redeclaration here - DECLAPI(RtlLookupFunctionEntry) picks it up from winnt.h.
 
 #endif // NATIVE_H

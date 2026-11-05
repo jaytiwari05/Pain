@@ -11,6 +11,8 @@ DECLFN void Beacon_Sleep( ULONG ms )
 
 #if   PAIN_SLEEP_TECH == SLEEP_TIMER_SPOOF
     Sleep_TimerSpoof( ms );
+#elif PAIN_SLEEP_TECH == SLEEP_EKKO_GRAFT
+    Sleep_EkkoGraft( ms );
 #elif PAIN_SLEEP_TECH == SLEEP_EKKO
     Sleep_Ekko( ms );
 #endif

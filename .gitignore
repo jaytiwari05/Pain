@@ -20,6 +20,11 @@ agent_pain/adaptix_agent_pain
 agent_pain/src_server/adaptix_agent_pain
 listener_pain_http/src_server/src_server
 
+# IDE tooling
+compile_commands.json
+.cache/
+.clangd/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

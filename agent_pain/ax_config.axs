@@ -57,20 +57,31 @@ function GenerateUI(listeners_type) {
     let authGroup = form.create_groupbox("Authentication");
     authGroup.setPanel(authPanel);
 
-    // ---- Sleep obfuscation group ----
+    // ---- Evasion group (sleep obfuscation + live stack spoof) ----
     let comboSleepTech = form.create_combo();
-    comboSleepTech.addItems(["Timer Spoof", "Ekko"]);
+    comboSleepTech.addItems(["Timer Spoof", "Ekko Graft", "Ekko"]);
     comboSleepTech.setCurrentIndex(0);
 
+    let checkStackSpoof = form.create_check("Live Stack Spoof");
+    checkStackSpoof.setChecked(false);
+    checkStackSpoof.setEnabled(false);  // only active with plain Ekko
+
+    form.connect(comboSleepTech, "currentTextChanged", function(text) {
+        let isEkko = (text === "Ekko");
+        checkStackSpoof.setEnabled(isEkko);
+        if (!isEkko) checkStackSpoof.setChecked(false);
+    });
+
     let sleepTechLayout = form.create_gridlayout();
-    sleepTechLayout.addWidget(form.create_label("Technique:"), 0, 0, 1, 1);
-    sleepTechLayout.addWidget(comboSleepTech,                   0, 1, 1, 1);
+    sleepTechLayout.addWidget(form.create_label("Sleep Tech:"),  0, 0, 1, 1);
+    sleepTechLayout.addWidget(comboSleepTech,                     0, 1, 1, 1);
+    sleepTechLayout.addWidget(checkStackSpoof,                    1, 0, 1, 2);
     sleepTechLayout.setColumnStretch(1, 1);
 
     let sleepTechPanel = form.create_panel();
     sleepTechPanel.setLayout(sleepTechLayout);
 
-    let sleepTechGroup = form.create_groupbox("Sleep Obfuscation");
+    let sleepTechGroup = form.create_groupbox("Evasion");
     sleepTechGroup.setPanel(sleepTechPanel);
 
     // ---- Output format group ----
@@ -101,17 +112,18 @@ function GenerateUI(listeners_type) {
     let rootPanel = form.create_panel();
     rootPanel.setLayout(rootLayout);
 
-    container.put("format",     comboFormat);
-    container.put("sleep",      spinSleep);
-    container.put("jitter",     spinJitter);
-    container.put("sleep_tech", comboSleepTech);
-    container.put("auth_mode",  comboAuth);
+    container.put("format",       comboFormat);
+    container.put("sleep",        spinSleep);
+    container.put("jitter",       spinJitter);
+    container.put("sleep_tech",   comboSleepTech);
+    container.put("stack_spoof",  checkStackSpoof);
+    container.put("auth_mode",    comboAuth);
 
 
     return {
         ui_panel:      rootPanel,
         ui_container:  container,
-        ui_height:     480,
+        ui_height:     510,
         ui_width:      580
     };
 }

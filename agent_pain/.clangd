@@ -1,0 +1,8 @@
+CompileFlags:
+  CompilationDatabase: .
+  Add:
+    - "-Wno-unknown-warning-option"
+    - "-Wno-ignored-attributes"
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None

