@@ -29,15 +29,20 @@ Then build the Adaptix client and server according to the AdaptixC2 instructions
 
 - **Position-Independent Code** - the agent is a raw `.bin` shellcode blob, no PE headers, no reflective loader needed
 - **HTTP and HTTPS transport** - talks to the C2 over HTTP POST, supports HTTPS with self-signed cert bypass
-- **Sleep obfuscation (Ekko)** - timer-chain sleep via `RtlCreateTimerQueue` + `NtContinue`: flips shellcode to RW, encrypts it with `cryptbase!SystemFunction040` (RtlEncryptMemory), XORs the full tracked heap, then restores - all while the main thread is parked in `NtSignalAndWaitForSingleObject`
-- **Sleep-time synthetic stack frame spoofing** - while the main thread is sleeping, a timer pool step calls `NtGetContextThread` (saves real RSP/RIP), then `NtSetContextThread` to point the thread's saved context at a hand-built fake stack (`NtSignalAndWait → kernel32 gadget → BaseThreadInitThunk+0x14 → RtlUserThreadStart+0x21`); real context is restored before `EvEnd` is signalled so the thread resumes cleanly
-- **Live call stack spoofing (SpoofCall)** - wraps every sensitive NT/WinAPI call with a synthetic call chain: pops the real return address, builds fake frames (`jmp [rbx]` gadget → `BaseThreadInitThunk` → `RtlUserThreadStart`) on the stack using UNWIND_INFO frame sizes, then `jmp`s (not `call`s) to the target; when the target returns the gadget fires and `.restore` jumps back to the real caller - no agent addresses visible in the call stack during active execution
+- **Malleable HTTP profiles** - upload a JSON profile when creating a listener to control the URI, User-Agent, custom request headers (e.g. `x-amz-date`), and server response format per callback; traffic can be made to blend in with real services (S3, CDN APIs, etc.)
+- **Domain rotation** - multiple C2 hosts baked into one agent at build time; three strategies selectable per listener: round-robin, random (LCG), or failover
+- **Sleep obfuscation** - three selectable techniques, all park the main thread in `NtSignalAndWaitForSingleObject` while a timer-pool chain does the work:
+  - *Ekko* - creates a fresh timer queue; flips shellcode RW, encrypts it with `SystemFunction040`, XORs the tracked heap, spoofs the sleep stack, then reverses everything before waking
+  - *EkkoGraft* - same chain but grafts onto an existing thread-pool timer queue instead of creating one, leaving fewer new kernel objects behind
+  - *TimerSpoof* - drives the same encrypt/decrypt cycle through `NtSetTimer2` rather than a named queue
+- **Sleep-time stack spoofing** - a step in every sleep chain calls `NtGetContextThread` to save the real RSP/RIP, then `NtSetContextThread` to replace the parked thread's saved context with a hand-built fake stack (`NtSignalAndWait → kernel32 gadget → BaseThreadInitThunk+0x14 → RtlUserThreadStart+0x21`); the real context is restored before the thread wakes, so a scanner inspecting the sleeping thread sees no agent addresses
+- **Live call stack spoofing (SpoofCall)** - wraps every sensitive NT/WinAPI call with a synthetic call chain: pops the real return address, builds fake frames (`jmp [rbx]` gadget → `BaseThreadInitThunk` → `RtlUserThreadStart`) on the stack using UNWIND_INFO frame sizes, then `jmp`s to the target; covers active execution - the call stack at the exact moment of a suspicious syscall shows only legitimate Windows frames
 - **Heap tracking** - all agent allocations go through a private heap with a linked-list tracker; the full heap gets XOR'd during sleep
-- **Runtime UUID** - every execution generates a fresh identity from ASLR entropy so running the same binary twice gives you two separate sessions
+- **Runtime UUID** - every execution generates a fresh identity from ASLR entropy so running the same binary twice gives two separate sessions
 - **Authentication** - two optional modes baked in at build time:
   - *Command Auth* - a random 16-byte key is generated per build, multiple runs of the same binary are allowed
   - *One-Time Key* - same thing but the server consumes the key on first check-in, any second run gets rejected
-- **Multiple output formats** - generate as a standalone EXE loader, a Windows Service EXE, a DLL, or a raw shellcode `.bin`
+- **Multiple output formats** - generate as `Pain.x64.exe` (standalone loader), `Pain.x64.svc.exe` (Windows Service), `Pain.x64.dll`, or a raw shellcode `.bin`
 - **BOF Support** - runs Beacon Object Files in-process with a full COFF loader and Beacon API implementation; compatible with the [Adaptix Extension-Kit](https://github.com/Adaptix-Framework/Extension-Kit) BOFs out of the box (whoami, execute-assembly, and the rest of the standard set)
 
 ---
@@ -73,7 +78,7 @@ Once the server is running, generate a payload from the Adaptix UI - pick your o
 
 ## Status
 
-This is a work in progress. The core beacon loop works - check-in, polling, basic commands (shell, pwd, ls, exit), sleep obfuscation, and HTTPS. Some things are still rough or not yet implemented.
+Work in progress. The core beacon loop is solid - check-in, polling, basic commands (shell, pwd, ls, exit), sleep obfuscation, HTTPS, malleable profiles, domain rotation, and BOF execution all work.
 
 Built while reading Kharon's source and figuring out how each piece fits together.
 
@@ -81,13 +86,9 @@ Built while reading Kharon's source and figuring out how each piece fits togethe
 
 ## What's Coming
 
-The agent isn't production-ready yet but there's a clear roadmap of where it's going:
-
 - **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it - keeping the agent process clean
-- **More Sleep Techniques** - explore EkkoGraft and TimerSpoof variants; indirect syscalls during the timer chain
 - **More Stack Spoofing** - extend live spoofing to cover more call sites; handle spoofing across injected threads and BOF execution contexts
-- **More Evasion Capabilities** - AMSI/ETW bypass, syscall obfuscation, and other techniques as the project matures
-- **C2 Profile Support** - malleable HTTP profiles so traffic patterns can be customized per engagement
+- **More Evasion Capabilities** - AMSI/ETW bypass, indirect syscalls during the timer chain, syscall obfuscation
 - **SMB Listener** - peer-to-peer beaconing over named pipes for internal network pivoting
 
 Good things are coming. Just not all at once.
