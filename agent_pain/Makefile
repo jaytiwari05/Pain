@@ -17,6 +17,10 @@ PAIN_AUTH_MODE   ?= 0
 PAIN_AUTH_KEY    ?= 00000000000000000000000000000000
 PAIN_SLEEP_TECH  ?= 0
 PAIN_STACK_SPOOF ?= 1
+# Malleable profile blob - injected by the agent builder; default = no profile (legacy mode)
+PAIN_MALLEABLE_BYTES ?= "{0x00}"
+PAIN_CALLBACK_COUNT  ?= 0
+PAIN_ROTATION        ?= 0
 # UUID is now generated at agent runtime - no compile-time value needed
 
 # Complier Flags - Cross-compile for windows
@@ -38,7 +42,10 @@ CXXFLAGS = -target x86_64-w64-mingw32 \
 		   -DPAIN_AUTH_MODE=$(PAIN_AUTH_MODE) \
 		   -DPAIN_AUTH_KEY=\"$(PAIN_AUTH_KEY)\" \
 		   -DPAIN_SLEEP_TECH=$(PAIN_SLEEP_TECH) \
-		   -DPAIN_STACK_SPOOF=$(PAIN_STACK_SPOOF)
+		   -DPAIN_STACK_SPOOF=$(PAIN_STACK_SPOOF) \
+		   -DPAIN_MALLEABLE_BYTES=$(PAIN_MALLEABLE_BYTES) \
+		   -DPAIN_CALLBACK_COUNT=$(PAIN_CALLBACK_COUNT) \
+		   -DPAIN_ROTATION=$(PAIN_ROTATION)
 
 
 # Output file as a PE COFF object file

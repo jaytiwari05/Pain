@@ -5,8 +5,9 @@ agent_pain/pain.x64.exe
 
 # Loader build outputs
 agent_pain/src_loader/loader.exe
-agent_pain/src_loader/pain.dll
-agent_pain/src_loader/pain_svc.exe
+agent_pain/src_loader/Pain.x64.exe
+agent_pain/src_loader/Pain.x64.dll
+agent_pain/src_loader/Pain.x64.svc.exe
 # pain_shellcode.h is intentionally tracked (kept for reference)
 
 # Go plugin build artifacts

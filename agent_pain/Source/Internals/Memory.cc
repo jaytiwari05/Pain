@@ -4,6 +4,18 @@
 #include <Defines.h>
 #include <Internals.h>
 
+// memset stub - the compiler may emit a memset call when zero-initialising large
+// structs (e.g. Agent::Config with the malleable callback fields).  The shellcode
+// has no C runtime, so we provide the symbol ourselves.
+extern "C" DECLFN void* memset( void* dst, int c, size_t n )
+{
+    unsigned char* p = (unsigned char*)dst;
+    unsigned char  v = (unsigned char)c;
+    size_t         i = n;
+    while ( i-- ) *p++ = v;
+    return dst;
+}
+
 // Allocate Virtual memory RW in the current process
 DECLFN PVOID Mem_Alloc( SIZE_T size )
 {

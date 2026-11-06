@@ -1,0 +1,54 @@
+{
+    "callbacks": [
+        {
+            "hosts": ["192.168.101.128:4445"],
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "server_error": {
+                "http_status": 403,
+                "response": "<html><body><h1>403 Forbidden</h1><p>Request blocked.</p></body></html>",
+                "headers": {
+                    "Content-Type":    "text/html",
+                    "Server":          "AmazonS3",
+                    "x-amz-request-id":"7A4C8BD92F1E0531"
+                }
+            },
+            "get": {
+                "server_headers": {
+                    "Content-Type":     "application/json",
+                    "Server":           "AmazonS3",
+                    "x-amz-request-id": "7A4C8BD92F1E0531",
+                    "Cache-Control":    "no-cache, no-store"
+                },
+                "client_headers": {
+                    "Accept":           "application/json",
+                    "x-amz-date":       "20240101T000000Z"
+                },
+                "empty_response": "{\"status\":\"ok\"}",
+                "uri": {
+                    "/api/v1/status /api/v1/health": {
+                        "server_output": { "mask": false, "format": "raw" },
+                        "client_output": { "mask": false, "format": "raw" }
+                    }
+                }
+            },
+            "post": {
+                "server_headers": {
+                    "Content-Type":     "application/json",
+                    "Server":           "AmazonS3",
+                    "x-amz-request-id": "7A4C8BD92F1E0531"
+                },
+                "client_headers": {
+                    "Content-Type":     "application/json",
+                    "x-amz-date":       "20240101T000000Z"
+                },
+                "empty_response": "{\"status\":\"ok\"}",
+                "uri": {
+                    "/api/v1/upload /api/v1/submit": {
+                        "server_output": { "mask": false, "format": "raw" },
+                        "client_output": { "mask": false, "format": "raw" }
+                    }
+                }
+            }
+        }
+    ]
+}

