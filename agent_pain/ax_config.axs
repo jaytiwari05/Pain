@@ -144,7 +144,17 @@ function RegisterCommands(listenerType) {
     cmd_bof.addArgString("bof_path", true,  "Path to the compiled .o file");
     cmd_bof.addArgString("bof_args", false, "Packed arguments from ax.bof_pack() (hex string)");
 
-    let group = ax.create_commands_group("pain", [cmd_shell, cmd_pwd, cmd_ls, cmd_exit, cmd_bof]);
+    let cmd_link_smb = ax.create_command("smb", "Link a child SMB beacon via named pipe", "link smb 192.168.1.1", "Linking SMB child...");
+    cmd_link_smb.addArgString("target", true, "Target hostname or IP address");
+    cmd_link_smb.addArgString("pipe_name", false, "Pipe name (default: pain)");
+
+    let cmd_link = ax.create_command("link", "Link to a child beacon for pivoting");
+    cmd_link.addSubCommands([cmd_link_smb]);
+
+    let cmd_unlink = ax.create_command("unlink", "Disconnect a linked SMB child beacon", "unlink <agent_id>", "Unlinking SMB child...");
+    cmd_unlink.addArgString("agent_id", true, "Agent ID of the SMB child to disconnect");
+
+    let group = ax.create_commands_group("pain", [cmd_shell, cmd_pwd, cmd_ls, cmd_exit, cmd_bof, cmd_link, cmd_unlink]);
     return { commands_windows: group };
 
 

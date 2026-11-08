@@ -65,14 +65,17 @@ EXTENDERS_DIR="$AX_DIST/extenders"
 
 AGENT_SRC="$PAIN_ROOT/agent_pain/src_server"
 LISTENER_SRC="$PAIN_ROOT/listener_pain_http/src_server"
+LISTENER_SMB_SRC="$PAIN_ROOT/listener_pain_smb/src_server"
 
 AGENT_EXTENDER="$EXTENDERS_DIR/agent_pain"
 LISTENER_EXTENDER="$EXTENDERS_DIR/listener_pain_http"
+LISTENER_SMB_EXTENDER="$EXTENDERS_DIR/listener_pain_smb"
 
 # Go module paths relative to go.work location (AdaptixServer/) - computed dynamically
 # so the same script works regardless of where the repos are checked out
 AGENT_MOD_REL="$(realpath --relative-to="$AX_SERVER" "$PAIN_ROOT/agent_pain/src_server")"
 LISTENER_MOD_REL="$(realpath --relative-to="$AX_SERVER" "$PAIN_ROOT/listener_pain_http")"
+LISTENER_SMB_MOD_REL="$(realpath --relative-to="$AX_SERVER" "$PAIN_ROOT/listener_pain_smb")"
 
 export GOWORK
 
@@ -85,7 +88,7 @@ echo "  GOWORK       : $GOWORK"
 
 # Step 1 - Check required tools
 
-step "1/8" "Checking required tools..."
+step "1/9" "Checking required tools..."
 
 check_tool() {
     if command -v "$1" &>/dev/null; then
@@ -104,7 +107,7 @@ check_tool "openssl"                 "On Kali/Ubuntu: sudo apt install openssl"
 
 # Step 2 - Register Pain modules in go.work (first-time only)
 
-step "2/8" "Checking go.work..."
+step "2/9" "Checking go.work..."
 
 [[ ! -f "$GOWORK" ]] && die "go.work not found at $GOWORK - is the Adaptix root correct?"
 
@@ -136,13 +139,14 @@ prune_gomod "../../Pain/agent_pain/src_server"  "old agent_pain/src_server"
 prune_gomod "../../Pain/listener_pain_http"      "old listener_pain_http"
 prune_gomod "../../Pain/listener_pain_http/src_server" "listener_pain_http/src_server (no go.mod)"
 
-register_gomod "$AGENT_MOD_REL"    "agent_pain/src_server"
-register_gomod "$LISTENER_MOD_REL" "listener_pain_http"
+register_gomod "$AGENT_MOD_REL"        "agent_pain/src_server"
+register_gomod "$LISTENER_MOD_REL"     "listener_pain_http"
+register_gomod "$LISTENER_SMB_MOD_REL" "listener_pain_smb"
 
 
 # Step 3 - Patch profile.yaml to list Pain extenders (first-time only)
 
-step "3/8" "Checking profile.yaml..."
+step "3/9" "Checking profile.yaml..."
 
 patch_profile() {
     local profile="$1"
@@ -152,7 +156,8 @@ patch_profile() {
 
     for entry in \
         "extenders/agent_pain/config.yaml" \
-        "extenders/listener_pain_http/config.yaml"
+        "extenders/listener_pain_http/config.yaml" \
+        "extenders/listener_pain_smb/config.yaml"
     do
         if grep -qF "$entry" "$profile" 2>/dev/null; then
             ok "$entry already in $(basename "$(dirname "$profile")")/profile.yaml"
@@ -172,7 +177,7 @@ patch_profile "$PROFILE_SRC"
 
 # Step 4 - Generate TLS certs if missing (first-time only)
 
-step "4/8" "Checking TLS certificates..."
+step "4/9" "Checking TLS certificates..."
 
 CERT="$AX_DIST/server.rsa.crt"
 KEY="$AX_DIST/server.rsa.key"
@@ -193,7 +198,7 @@ fi
 
 # Step 5 - Build agent plugin
 
-step "5/8" "Building agent plugin..."
+step "5/9" "Building agent plugin..."
 cd "$AGENT_SRC"
 go build -buildmode=plugin -o pain.so .
 ok "pain.so built"
@@ -201,30 +206,40 @@ ok "pain.so built"
 
 # Step 6 - Build listener plugin
 
-step "6/8" "Building listener plugin..."
+step "6/9" "Building HTTP listener plugin..."
 cd "$LISTENER_SRC"
 go build -buildmode=plugin -o listener_pain_http.so .
 ok "listener_pain_http.so built"
 
 
-# Step 7 - Rebuild adaptixserver (must match plugin build)
+# Step 7 - Build SMB listener plugin
 
-step "7/8" "Rebuilding adaptixserver..."
+step "7/9" "Building SMB listener plugin..."
+cd "$LISTENER_SMB_SRC"
+go build -buildmode=plugin -o listener_pain_smb.so .
+ok "listener_pain_smb.so built"
+
+
+# Step 8 - Rebuild adaptixserver (must match plugin build)
+
+step "8/9" "Rebuilding adaptixserver..."
 cd "$AX_SERVER"
 go build -o "$AX_DIST/adaptixserver" .
 ok "adaptixserver rebuilt"
 
 
-# Step 8 - Deploy to extenders/
+# Step 9 - Deploy to extenders/
 
-step "8/8" "Deploying to extenders/..."
+step "9/9" "Deploying to extenders/..."
 
-mkdir -p "$AGENT_EXTENDER" "$LISTENER_EXTENDER"
+mkdir -p "$AGENT_EXTENDER" "$LISTENER_EXTENDER" "$LISTENER_SMB_EXTENDER"
 
-cp "$AGENT_SRC/pain.so"                          "$AGENT_EXTENDER/pain.so"
-cp "$LISTENER_SRC/listener_pain_http.so"         "$LISTENER_EXTENDER/listener_pain_http.so"
-cp "$PAIN_ROOT/agent_pain/ax_config.axs"         "$AGENT_EXTENDER/ax_config.axs"
-cp "$PAIN_ROOT/listener_pain_http/ax_config.axs" "$LISTENER_EXTENDER/ax_config.axs"
+cp "$AGENT_SRC/pain.so"                              "$AGENT_EXTENDER/pain.so"
+cp "$LISTENER_SRC/listener_pain_http.so"             "$LISTENER_EXTENDER/listener_pain_http.so"
+cp "$LISTENER_SMB_SRC/listener_pain_smb.so"          "$LISTENER_SMB_EXTENDER/listener_pain_smb.so"
+cp "$PAIN_ROOT/agent_pain/ax_config.axs"             "$AGENT_EXTENDER/ax_config.axs"
+cp "$PAIN_ROOT/listener_pain_http/ax_config.axs"     "$LISTENER_EXTENDER/ax_config.axs"
+cp "$PAIN_ROOT/listener_pain_smb/ax_config.axs"      "$LISTENER_SMB_EXTENDER/ax_config.axs"
 
 # Write agent config.yaml
 cat > "$AGENT_EXTENDER/config.yaml" <<'EOF'
@@ -236,10 +251,11 @@ agent_name: "pain"
 agent_watermark: "deadbeef"
 listeners:
   - "PainHTTP"
+  - "PainSMB"
 multi_listeners: false
 EOF
 
-# Write listener config.yaml
+# Write HTTP listener config.yaml
 cat > "$LISTENER_EXTENDER/config.yaml" <<'EOF'
 extender_type: "listener"
 extender_file: "listener_pain_http.so"
@@ -248,6 +264,17 @@ ax_file: "ax_config.axs"
 listener_name: "PainHTTP"
 listener_type: "external"
 protocol: "http"
+EOF
+
+# Write SMB listener config.yaml
+cat > "$LISTENER_SMB_EXTENDER/config.yaml" <<'EOF'
+extender_type: "listener"
+extender_file: "listener_pain_smb.so"
+ax_file: "ax_config.axs"
+
+listener_name: "PainSMB"
+listener_type: "internal"
+protocol: "smb"
 EOF
 
 # Symlink the agent source tree so the plugin resolves ModuleDir/src_agent at runtime.
@@ -264,9 +291,10 @@ ok "Files deployed"
 echo ""
 echo "  Pain is ready."
 echo ""
-echo "  Agent extender   : $AGENT_EXTENDER"
-echo "  Listener extender: $LISTENER_EXTENDER"
-echo "  Server binary    : $AX_DIST/adaptixserver"
+echo "  Agent extender       : $AGENT_EXTENDER"
+echo "  HTTP listener extender: $LISTENER_EXTENDER"
+echo "  SMB listener extender : $LISTENER_SMB_EXTENDER"
+echo "  Server binary        : $AX_DIST/adaptixserver"
 echo ""
 echo "  Start the server:"
 echo "    cd $AX_DIST && ./adaptixserver -c profile.yaml"

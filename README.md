@@ -80,6 +80,8 @@ Once the server is running, generate a payload from the Adaptix UI - pick your o
 
 Work in progress. The core beacon loop is solid - check-in, polling, basic commands (shell, pwd, ls, exit), sleep obfuscation, HTTPS, malleable profiles, domain rotation, and BOF execution all work.
 
+The SMB listener exists and is partially functional but is **not stable** - it is still in active development and not ready for real use.
+
 Built while reading Kharon's source and figuring out how each piece fits together.
 
 ---
@@ -89,6 +91,6 @@ Built while reading Kharon's source and figuring out how each piece fits togethe
 - **Sacrificial Process for execute-assembly** - currently `execute-assembly` runs the CLR in-process and leaves JIT RWX pages behind; the plan is to inject into a short-lived sacrificial process, collect output over a named pipe, and kill it - keeping the agent process clean
 - **More Stack Spoofing** - extend live spoofing to cover more call sites; handle spoofing across injected threads and BOF execution contexts
 - **More Evasion Capabilities** - AMSI/ETW bypass, indirect syscalls during the timer chain, syscall obfuscation
-- **SMB Listener** - peer-to-peer beaconing over named pipes for internal network pivoting
+- **SMB Listener** - peer-to-peer beaconing over named pipes *(implemented, stabilisation in progress)*
 
 Good things are coming. Just not all at once.

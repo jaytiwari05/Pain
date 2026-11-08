@@ -1,0 +1,7 @@
+extender_type: "listener"
+extender_file: "listener_pain_smb.so"
+ax_file: "ax_config.axs"
+
+listener_name: "PainSMB"
+listener_type: "internal"
+protocol: "smb"

